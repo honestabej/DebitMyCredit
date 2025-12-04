@@ -1,0 +1,8 @@
+{
+    "appService.zipIgnorePattern": [
+        "node_modules{,/**}",
+        ".vscode{,/**}"
+    ],
+    "appService.defaultWebAppToDeploy": "/subscriptions/d3078cf2-9775-409e-b2cc-dfd72228cc85/resourceGroups/debitMyCredit/providers/Microsoft.Web/sites/debitMyCredit",
+    "appService.deploySubpath": "."
+}
