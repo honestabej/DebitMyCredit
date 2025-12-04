@@ -1,0 +1,39 @@
+# Environment files
+.env
+.env.*
+
+# Node
+node_modules/
+npm-debug.log
+yarn.lock
+
+# iOS / Xcode
+DerivedData/
+*.xcuserstate
+*.xcuserdata
+.build/
+
+# CoreData temp
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Logs
+logs
+*.log
+
+# OS junk
+.DS_Store
+
+# SQL Schema
+Schema.sql
+SchemaOld.sql
+
+# Example data for reference
+DummyData.json
+
+# My old code
+oldServer.js
+
+# VSCode stuff
+.vscode/
