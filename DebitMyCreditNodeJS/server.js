@@ -530,7 +530,8 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
       return request.query(`
         SELECT *
         FROM Transactions
-        WHERE userID = @userID AND id IN (${idParams})
+        WHERE userID = @userID AND id IN (${idParams}) 
+        ORDER BY transactionDate DESC
       `);
     });
 
@@ -548,8 +549,8 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
       .query(`
         SELECT *
         FROM Transactions
-        WHERE userID = @userID
-          AND updatedAt > @lastSync
+        WHERE userID = @userID AND updatedAt > @lastSync
+        ORDER BY transactionDate DESC
       `);
     });
 
@@ -563,6 +564,7 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
         SELECT *
         FROM Transactions
         WHERE userID = @userID
+        ORDER BY transactionDate DESC
       `);
     });
 
@@ -1121,7 +1123,7 @@ app.get("/get-transactions", async (req, res) => {
     const result = await safeQuery(async () => {
       return pool.request()
       .input("userID", sql.VarChar(50), userID)
-      .query(`SELECT * FROM Transactions WHERE userID = @userID`);
+      .query(`SELECT * FROM Transactions WHERE userID = @userID ORDER BY transactionDate DESC`);
     });
 
     return res.json({ success: true, result: result });
@@ -1238,7 +1240,7 @@ app.get("/users", async (req, res) => {
         const pool = await sql.connect(azureConfig);
 
         const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Users") });
-        
+
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
@@ -1276,7 +1278,7 @@ app.get("/transactions", async (req, res) => {
     try {
         const pool = await sql.connect(azureConfig);
 
-        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Transactions") });
+        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Transactions ORDER BY transactionDate DESC") });
 
         res.json(result.recordset);
     } catch (err) {
