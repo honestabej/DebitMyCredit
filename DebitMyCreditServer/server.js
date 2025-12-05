@@ -67,13 +67,27 @@ async function wakeDatabase() {
 }
 
 // Wrapper function to ensure Azure DB is awake before sending any requests
-async function safeQuery(work) {
-  try {
-    return await work();
-  } catch (err) {
-    console.warn("Retrying DB due to error:", err.message);
-    await new Promise(r => setTimeout(r, 2000));
-    return await work();
+async function safeQuery(work, maxRetries = 5, baseDelay = 2000) {
+  let attempt = 0;
+
+  while (attempt < maxRetries) {
+    try {
+      return await work();
+    } catch (err) {
+      attempt++;
+      console.warn(`Attempt ${attempt} failed: ${err.message}`);
+
+      if (attempt >= maxRetries) {
+          throw err; // Give up after maxRetries
+      }
+
+      await wakeDatabase();
+
+      // Exponential backoff: wait longer each retry
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`Waiting ${delay}ms before retrying...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
   }
 }
 

@@ -13,6 +13,7 @@ struct LoginView: View {
     @State private var isSecureEntry: Bool = true
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
+    @State private var showErrorAlert: Bool = false
 
     var body: some View {
         ZStack {
@@ -92,7 +93,7 @@ struct LoginView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.22), in: .rect(cornerRadius: 12))
+                        .background(Color.white.opacity(0.20), in: .rect(cornerRadius: 12))
                         .foregroundStyle(.white)
                     }
                     .disabled(isLoading || email.isEmpty || password.isEmpty)
@@ -122,21 +123,49 @@ struct LoginView: View {
             }
             .padding(.top, 60)
             .padding(.bottom, 24)
+            .alert("Sign In Error", isPresented: $showErrorAlert, presenting: errorMessage) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
+            }
+
+            if isLoading {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                ProgressView("Logging in...")
+                    .padding(16)
+                    .background(.ultraThinMaterial, in: .rect(cornerRadius: 14))
+                    .tint(.white)
+                    .foregroundStyle(.white)
+            }
         }
     }
 
     private func login() {
+        let start = Date()
         errorMessage = nil
         guard !email.isEmpty, !password.isEmpty else { return }
         isLoading = true
-        // Simulate async login for now
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            isLoading = false
-            // Placeholder success/failure
-            if email.lowercased().hasSuffix("@example.com") && password.count >= 4 {
-                // success path; integrate real auth later
-            } else {
-                errorMessage = "Invalid email or password. Try again."
+
+        APIService.login(email: email, password: password) { result in
+            DispatchQueue.main.async {
+                isLoading = false
+                switch result {
+                case .success(let json):
+                    // Check if login was successful from server response
+                    if let success = json["success"] as? Bool, success {
+                        // TODO: Navigate to main app view or save auth token
+                        print("Login successful: \(json)")
+                    } else {
+                        errorMessage = json["message"] as? String ?? "Login failed"
+                        print("[Login] Server indicated failure. message=", errorMessage ?? "<none>")
+                        showErrorAlert = true
+                    }
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                    print("[Login] Network error=", error.localizedDescription)
+                    showErrorAlert = true
+                }
             }
         }
     }
