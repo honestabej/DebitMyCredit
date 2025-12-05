@@ -1236,9 +1236,9 @@ app.post("/update-transfer-group", async (req, res) => {
 app.get("/users", async (req, res) => {
     try {
         const pool = await sql.connect(azureConfig);
-        const result = await safeQuery(async () => {
-          return pool.request().query("SELECT * FROM dbo.Users");
-        });
+
+        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Users") });
+        
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
@@ -1249,7 +1249,9 @@ app.get("/users", async (req, res) => {
 app.get("/debitaccounts", async (req, res) => {
     try {
         const pool = await sql.connect(azureConfig);
-        const result = await pool.request().query("SELECT * FROM dbo.DebitAccounts");
+
+        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.DebitAccounts") });
+
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
@@ -1260,7 +1262,9 @@ app.get("/debitaccounts", async (req, res) => {
 app.get("/creditaccounts", async (req, res) => {
     try {
         const pool = await sql.connect(azureConfig);
-        const result = await pool.request().query("SELECT * FROM dbo.CreditAccounts");
+
+        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.CreditAccounts") });
+
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
@@ -1271,7 +1275,9 @@ app.get("/creditaccounts", async (req, res) => {
 app.get("/transactions", async (req, res) => {
     try {
         const pool = await sql.connect(azureConfig);
-        const result = await pool.request().query("SELECT * FROM dbo.Transactions");
+
+        const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Transactions") });
+
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
@@ -1283,7 +1289,7 @@ app.get("/db-health", async (req, res) => {
   try {
     const pool = await sql.connect(azureConfig);
 
-    const result = await pool.request().query(`SELECT 1 AS dbAlive`);
+    const result = await safeQuery(async () => { return pool.request().query(`SELECT 1 AS dbAlive`) });
 
     return res.json({
       success: true,
