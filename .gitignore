@@ -1,13 +1,16 @@
 # Environment files
+/DebitMyCreditServer/.env
 .env
 .env.*
 
 # Node
+/DebitMyCreditServer/node_modules/
 node_modules/
 npm-debug.log
 yarn.lock
 
 # iOS / Xcode
+/DebitMyCreditApp/DerivedData/
 DerivedData/
 *.xcuserstate
 *.xcuserdata
