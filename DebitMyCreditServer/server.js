@@ -784,7 +784,7 @@ app.post("/register", async (req, res) => {
       `);
     });
 
-    res.json({ success: true, message: `New user registered with id: ${id}` });
+    res.json({ success: true, id: id, message: `New user registered with id: ${id}` });
 
   } catch (e) {
     console.error("/register returned the following error: ", e);
