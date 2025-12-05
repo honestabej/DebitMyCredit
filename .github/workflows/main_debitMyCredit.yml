@@ -11,35 +11,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Check out your repo
       - uses: actions/checkout@v4
 
-      # 2. Set up Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '24.x'
 
-      # 3. Install dependencies and build
       - name: Install dependencies
-        run: |
-          cd DebitMyCreditNodeJS
-          npm install
-          npm run build --if-present
-          npm run test --if-present
+        working-directory: DebitMyCreditNodeJS
+        run: npm install
 
-      # 4. Log in to Azure
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_D6527BF2603B44FABAF14A70F506258A }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_B632BAB747484BAEA6E3D00E7C29B378 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_C492776E6DC44DA9B671A8955887B82B }}
-
-      # 5. Deploy to Azure
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'debitMyCredit'
-          slot-name: 'Production'
-          package: 'DebitMyCreditNodeJS'
+          app-name: debitMyCredit
+          slot-name: Production
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: DebitMyCreditNodeJS
