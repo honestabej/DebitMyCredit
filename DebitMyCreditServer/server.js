@@ -861,7 +861,7 @@ app.post("/connect-simplefin", async (req, res) => {
           simpleFinUsernameTag=@usernameTag,
           simpleFinPasswordData=@passwordData,
           simpleFinPasswordIV=@passwordIV,
-          simpleFinPasswordTag=@passwordTag
+          simpleFinPasswordTag=@passwordTag,
           updatedAt = SYSUTCDATETIME()
         WHERE id=@id
       `);
