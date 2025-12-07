@@ -822,7 +822,9 @@ app.post("/login", async (req, res) => {
     if (!valid) {
       return res.json({ success: false, message: "Invalid email and password" });
     } else {
-      return res.json({ success: true, id: user.id });
+      return res.json({ success: true, id: user.id, email: user.email, 
+        fetchFrequency: user.fetchFrequency, lastSimpleFinSync: user.lastSimpleFinSync, 
+        simpleFinUsernameData: user.simpleFinUsernameData, createdAt: user.createdAt, updatedAt: user.updatedAt });
     }
 
   } catch (e) {
