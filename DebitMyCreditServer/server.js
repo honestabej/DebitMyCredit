@@ -807,7 +807,7 @@ app.post("/login", async (req, res) => {
       return pool.request()
       .input("email", sql.VarChar(255), email)
       .query(`
-        SELECT id, passwordHash
+        SELECT id, email, fetchFrequency, lastSimpleFinSync, simpleFinUsernameData, createdAt, updatedAt, passwordHash
         FROM Users
         WHERE email = @email
       `);
