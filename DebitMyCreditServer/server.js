@@ -803,28 +803,27 @@ app.post("/register", async (req, res) => {
 
     const newUser = newUserResult.recordset[0];
 
-    const newTransferGroupResult = await safeQuery(async () => {
-      return pool.request()
-        .input("tgid", sql.VarChar(50), tgid)
-        .query(`
-          SELECT 
-            id,
-            userID,
-            name,
-            createdAt,
-            updatedAt
-          FROM TransferGroups
-          WHERE id = @tgid
-        `);
-    });
+    // const newTransferGroupResult = await safeQuery(async () => {
+    //   return pool.request()
+    //     .input("tgid", sql.VarChar(50), tgid)
+    //     .query(`
+    //       SELECT 
+    //         id,
+    //         userID,
+    //         name,
+    //         createdAt,
+    //         updatedAt
+    //       FROM TransferGroups
+    //       WHERE id = @tgid
+    //     `);
+    // });
 
-    const newTransferGroup = newTransferGroupResult.recordset[0];
+    // const newTransferGroup = newTransferGroupResult.recordset[0];
 
     res.json({ 
       success: true, 
       message: `New user registered`,
-      user: newUser,
-      transferGroup: newTransferGroup
+      user: newUser
     });
 
   } catch (e) {
@@ -858,6 +857,9 @@ app.post("/login", async (req, res) => {
     if (result.recordset.length === 0) return res.json({ success: false, message: "Invalid email and password" });    
     const user = result.recordset[0];
     const valid = await bcrypt.compare(password, user.passwordHash);
+
+    // Remove passwordHash before returning
+    delete user.passwordHash;
 
     // Return json success/fail 
     if (!valid) {
