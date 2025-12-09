@@ -858,14 +858,16 @@ app.post("/login", async (req, res) => {
     const user = result.recordset[0];
     const valid = await bcrypt.compare(password, user.passwordHash);
 
-    // Remove passwordHash before returning
-    delete user.passwordHash;
+    // Remove simpleFinUsernameData and passwordHash before returning
+    const simpleFinCredentialsSet = !!user.simpleFinUsernameData;
+    delete user.simpleFinUsernameData;
+    delete user.passwordHash;    
 
     // Return json success/fail 
     if (!valid) {
       return res.json({ success: false, message: "Invalid email and password" });
     } else {
-      return res.json({ success: true, user: user });
+      return res.json({ success: true, user: { ...user, simpleFinCredentialsSet });
     }
 
   } catch (e) {
