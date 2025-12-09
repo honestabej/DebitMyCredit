@@ -784,7 +784,48 @@ app.post("/register", async (req, res) => {
       `);
     });
 
-    res.json({ success: true, id: id, message: `New user registered with id: ${id}` });
+    // Fetch the newly created user and transfer group to return to the client
+    const newUserResult = await safeQuery(async () => {
+      return pool.request()
+        .input("id", sql.VarChar(50), id)
+        .query(`
+          SELECT 
+            id,
+            email,
+            fetchFrequency,
+            lastSimpleFinSync,
+            createdAt,
+            updatedAt
+          FROM Users
+          WHERE id = @id
+        `);
+    });
+
+    const newUser = newUserResult.recordset[0];
+
+    const newTransferGroupResult = await safeQuery(async () => {
+      return pool.request()
+        .input("tgid", sql.VarChar(50), tgid)
+        .query(`
+          SELECT 
+            id,
+            userID,
+            name,
+            createdAt,
+            updatedAt
+          FROM TransferGroups
+          WHERE id = @tgid
+        `);
+    });
+
+    const newTransferGroup = newTransferGroupResult.recordset[0];
+
+    res.json({ 
+      success: true, 
+      message: `New user registered`,
+      user: newUser,
+      transferGroup: newTransferGroup
+    });
 
   } catch (e) {
     console.error("/register returned the following error: ", e);
@@ -822,9 +863,7 @@ app.post("/login", async (req, res) => {
     if (!valid) {
       return res.json({ success: false, message: "Invalid email and password" });
     } else {
-      return res.json({ success: true, id: user.id, email: user.email, 
-        fetchFrequency: user.fetchFrequency, lastSimpleFinSync: user.lastSimpleFinSync, 
-        simpleFinUsernameData: user.simpleFinUsernameData, createdAt: user.createdAt, updatedAt: user.updatedAt });
+      return res.json({ success: true, user: user });
     }
 
   } catch (e) {
