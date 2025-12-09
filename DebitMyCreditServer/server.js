@@ -867,7 +867,7 @@ app.post("/login", async (req, res) => {
     if (!valid) {
       return res.json({ success: false, message: "Invalid email and password" });
     } else {
-      return res.json({ success: true, user: { ...user, simpleFinCredentialsSet });
+      return res.json({ success: true, user: { ...user, simpleFinCredentialsSet }});
     }
 
   } catch (e) {
