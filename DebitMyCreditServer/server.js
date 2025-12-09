@@ -1023,6 +1023,18 @@ app.post("/sync-simplefin-data", async (req, res) => {
     // Add any transactions to the Azure DB
     const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
 
+    // Set the lastSimpleFinSync time for the user
+    await safeQuery(async () => {
+      return pool.request()
+        .input("userID", sql.VarChar(50), userID)
+        .input("lastSync", sql.DateTimeOffset, new Date())
+        .query(`
+          UPDATE Users
+          SET lastSimpleFinSync = @lastSync, updatedAt = SYSUTCDATETIME()
+          WHERE id = @userID
+        `);
+    });
+
     // Return a message to the user 
     return res.json({ success: true, message: "New SimpleFin data synced to DB. "+acctBalanceUpdateCt+" account balances updated, and "+insertedTransactionsCt+" transactions imported." });
     
