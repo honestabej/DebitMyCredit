@@ -104,7 +104,8 @@ async function fetchSimpleFinAccounts(userID) {
   const pool = await sql.connect(azureConfig);
 
   // Get the user's simpleFin credentials
-  const userResult = await pool.request()
+  const userResult = await safeQuery(async () => {
+    return pool.request()
     .input("userID", sql.VarChar(50), userID)
     .query(`
       SELECT 
@@ -113,6 +114,7 @@ async function fetchSimpleFinAccounts(userID) {
       FROM Users
       WHERE id = @userID
     `);
+  });
 
   if (userResult.recordset.length === 0) throw new Error("User not found");
 
@@ -912,7 +914,44 @@ app.post("/connect-simplefin", async (req, res) => {
       `);
     });
 
-    return res.json({ success: true, message: "SimpleFIN credentials saved securely"});
+    // Send request to SimpleFin with new credentials to verify theyre correct and populate the user's accounts
+    const response = await axios.get(
+      `https://beta-bridge.simplefin.org/simplefin/accounts`,
+      { auth: { username: simpleFinUsername, password: simpleFinPassword } }
+    );
+
+    // Check if the response gave permission or not
+    if (response.errors?.includes("Forbidden")) {
+      return res.json({ success: true, message: "SimpleFIN credentials saved, but SimpleFIN returned an access error. Please ensure SimpleFIN credentials are correct."});
+    }
+
+    // Save the user's accounts to otherAccounts
+    for (const account of response.accounts) {
+      // If the account not exist on any accounts table, add it to the OtherAccounts table
+      await safeQuery(async () => {
+        return pool.request()
+        .input("id", sql.VarChar(50), account.id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("name", sql.NVarChar(255), account.name)
+        .input("acctBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0)
+        .input("activeBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0) // TODO: May deprecate in futue
+        .query(`
+          IF NOT EXISTS (
+              SELECT 1 FROM DebitAccounts WHERE id = @id
+              UNION ALL
+              SELECT 1 FROM CreditAccounts WHERE id = @id
+              UNION ALL
+              SELECT 1 FROM OtherAccounts WHERE id = @id
+          )
+          BEGIN
+              INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance)
+              VALUES (@id, @userID, @name, @acctBalance, @activeBalance)
+          END 
+        `);
+      });
+    }    
+
+    return res.json({ success: true, message: "SimpleFIN credentials saved and SimpleFIN accessed successfully!"});
 
   } catch (e) {
     console.error("/connect-simplefin returned the following error: ", e);
@@ -1179,6 +1218,62 @@ app.get("/get-debit-accounts", async (req, res) => {
   } catch (e) {
     console.error("/get-debit-accounts returned the following error: ", e);
     return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  }
+});
+
+// Get all user accounts (debit, credit, other)
+app.get("/get-all-accounts", async (req, res) => {
+  try {
+    const userID = req.body.userID; // or req.query.userID if you're using query params
+    if (!userID) {
+      return res.status(400).json({ success: false, error: "userID required" });
+    }
+
+    // Connect to Azure DB
+    const pool = await sql.connect(azureConfig);
+
+    // Run all three queries safely
+    const result = await safeQuery(async () => {
+      const debitQuery = pool.request()
+        .input("userID", sql.VarChar(50), userID)
+        .query(`SELECT * FROM DebitAccounts WHERE userID = @userID`);
+
+      const creditQuery = pool.request()
+        .input("userID", sql.VarChar(50), userID)
+        .query(`SELECT * FROM CreditAccounts WHERE userID = @userID`);
+
+      const otherQuery = pool.request()
+        .input("userID", sql.VarChar(50), userID)
+        .query(`SELECT * FROM OtherAccounts WHERE userID = @userID`);
+
+      // Run in parallel for speed
+      const [debitResult, creditResult, otherResult] = await Promise.all([
+        debitQuery,
+        creditQuery,
+        otherQuery
+      ]);
+
+      return {
+        debitAccounts: debitResult.recordset,
+        creditAccounts: creditResult.recordset,
+        otherAccounts: otherResult.recordset
+      };
+    });
+
+    // ✅ Final response format exactly as requested
+    return res.json({
+      success: true,
+      debitAccounts: result.debitAccounts,
+      creditAccounts: result.creditAccounts,
+      otherAccounts: result.otherAccounts
+    });
+
+  } catch (e) {
+    console.error("/get-all-accounts returned the following error: ", e);
+    return res.status(500).json({
+      success: false,
+      message: "Server error, please try again later"
+    });
   }
 });
 
