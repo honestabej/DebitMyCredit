@@ -920,13 +920,15 @@ app.post("/connect-simplefin", async (req, res) => {
       { auth: { username: simpleFinUsername, password: simpleFinPassword } }
     );
 
+    console.log(response)
+
     // Check if the response gave permission or not
     if (response.errors?.includes("Forbidden")) {
       return res.json({ success: true, message: "SimpleFIN credentials saved, but SimpleFIN returned an access error. Please ensure SimpleFIN credentials are correct."});
     }
 
     // Save the user's accounts to otherAccounts
-    for (const account of response.accounts) {
+    for (const account of response.data.accounts) {
       // If the account not exist on any accounts table, add it to the OtherAccounts table
       await safeQuery(async () => {
         return pool.request()
@@ -1260,7 +1262,6 @@ app.get("/get-all-accounts", async (req, res) => {
       };
     });
 
-    // ✅ Final response format exactly as requested
     return res.json({
       success: true,
       debitAccounts: result.debitAccounts,
