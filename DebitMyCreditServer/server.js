@@ -923,7 +923,7 @@ app.post("/connect-simplefin", async (req, res) => {
     console.log(response)
 
     // Check if the response gave permission or not
-    if (response.errors?.includes("Forbidden")) {
+    if (response.data.errors?.includes("Forbidden")) {
       return res.json({ success: true, message: "SimpleFIN credentials saved, but SimpleFIN returned an access error. Please ensure SimpleFIN credentials are correct."});
     }
 
@@ -935,8 +935,8 @@ app.post("/connect-simplefin", async (req, res) => {
         .input("id", sql.VarChar(50), account.id)
         .input("userID", sql.UniqueIdentifier, userID)
         .input("name", sql.NVarChar(255), account.name)
-        .input("acctBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0)
-        .input("activeBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0) // TODO: May deprecate in futue
+        .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+        .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0) // TODO: May deprecate in futue
         .query(`
           IF NOT EXISTS (
               SELECT 1 FROM DebitAccounts WHERE id = @id
