@@ -920,8 +920,6 @@ app.post("/connect-simplefin", async (req, res) => {
       { auth: { username: simpleFinUsername, password: simpleFinPassword } }
     );
 
-    console.log(response)
-
     // Check if the response gave permission or not
     if (response.data.errors?.includes("Forbidden")) {
       return res.json({ success: true, message: "SimpleFIN credentials saved, but SimpleFIN returned an access error. Please ensure SimpleFIN credentials are correct."});
@@ -964,7 +962,7 @@ app.post("/connect-simplefin", async (req, res) => {
 // Initiate a call to simpleFin to get all available accounts
 app.get("/get-simplefin-accounts", async (req, res) => {
     try { 
-    const { userID } = req.body;
+    const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "No userID provided" });
 
     // Get and decrypt the user's simpleFin credentials, call to simpleFin API, and return the JSON response
@@ -1090,7 +1088,7 @@ app.post("/sync-simplefin-data", async (req, res) => {
 // Get a user
 app.get("/load-user", async (req, res) => {
   try {
-    const userID = req.body.userID;
+    const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
@@ -1202,7 +1200,7 @@ app.post("/insert-transfer-group", async (req, res) => {
 // Get a user's accounts data
 app.get("/get-debit-accounts", async (req, res) => {
   try {
-    const userID = req.body.userID;
+    const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
@@ -1226,7 +1224,7 @@ app.get("/get-debit-accounts", async (req, res) => {
 // Get all user accounts (debit, credit, other)
 app.get("/get-all-accounts", async (req, res) => {
   try {
-    const userID = req.body.userID; // or req.query.userID if you're using query params
+    const userID = req.query.userID; // or req.query.userID if you're using query params
     if (!userID) {
       return res.status(400).json({ success: false, error: "userID required" });
     }
@@ -1281,7 +1279,7 @@ app.get("/get-all-accounts", async (req, res) => {
 // Get a user's transactions data
 app.get("/get-transactions", async (req, res) => {
   try {
-    const userID = req.body.userID;
+    const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
@@ -1305,7 +1303,7 @@ app.get("/get-transactions", async (req, res) => {
 // Get a user's transfer group data
 app.get("/get-transfer-groups", async (req, res) => {
   try {
-    const userID = req.body.userID;
+    const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
