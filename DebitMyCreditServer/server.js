@@ -935,26 +935,50 @@ app.post("/connect-simplefin", async (req, res) => {
       // If the account not exist on any accounts table, add it to the OtherAccounts table
       await safeQuery(async () => {
         return pool.request()
-        .input("id", sql.VarChar(50), account.id)
-        .input("userID", sql.UniqueIdentifier, userID)
-        .input("name", sql.NVarChar(255), account.name)
-        .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
-        .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0) // TODO: May deprecate in futue
-        .input("balanceDate", sql.DateTimeOffset, balanceDate)
-        .query(`
-          IF NOT EXISTS (
-              SELECT 1 FROM DebitAccounts WHERE id = @id
-              UNION ALL
-              SELECT 1 FROM CreditAccounts WHERE id = @id
-              UNION ALL
-              SELECT 1 FROM OtherAccounts WHERE id = @id
-          )
-          BEGIN
+          .input("id", sql.VarChar(50), account.id)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("name", sql.NVarChar(255), account.name)
+          .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+          .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+          .input("balanceDate", sql.DateTimeOffset, balanceDate)
+          .query(`
+            -- Try to update the account IN WHICHEVER TABLE IT EXISTS
+            UPDATE DebitAccounts
+              SET name = @name,
+                  acctBalance = @acctBalance,
+                  activeBalance = @activeBalance,
+                  balanceDate = @balanceDate
+            WHERE id = @id;
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+              UPDATE CreditAccounts
+                SET name = @name,
+                    acctBalance = @acctBalance,
+                    activeBalance = @activeBalance,
+                    balanceDate = @balanceDate
+              WHERE id = @id;
+            END
+
+            IF @@ROWCOUNT = 0
+            BEGIN
+              UPDATE OtherAccounts
+                SET name = @name,
+                    acctBalance = @acctBalance,
+                    activeBalance = @activeBalance,
+                    balanceDate = @balanceDate
+              WHERE id = @id;
+            END
+
+            -- If still not found anywhere, insert into OtherAccounts
+            IF @@ROWCOUNT = 0
+            BEGIN
               INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance, balanceDate)
               VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @balanceDate)
-          END 
-        `);
+            END
+          `);
       });
+
     }    
 
     return res.json({ success: true, message: "SimpleFIN credentials saved and SimpleFIN accessed successfully!"});
