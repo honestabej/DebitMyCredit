@@ -986,7 +986,7 @@ app.post("/remove-simplefin", async (req, res) => {
           simpleFinUsernameTag = NULL,
           simpleFinPasswordData = NULL,
           simpleFinPasswordIV = NULL,
-          simpleFinPasswordTag = NULL
+          simpleFinPasswordTag = NULL,
           updatedAt = SYSUTCDATETIME()
         WHERE id=@id
       `);
