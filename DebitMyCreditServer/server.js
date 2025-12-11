@@ -927,6 +927,7 @@ app.post("/connect-simplefin", async (req, res) => {
 
     // Save the user's accounts to otherAccounts
     for (const account of response.data.accounts) {
+      console.log(account)
       // If the account not exist on any accounts table, add it to the OtherAccounts table
       await safeQuery(async () => {
         return pool.request()
