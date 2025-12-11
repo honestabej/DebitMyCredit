@@ -935,6 +935,7 @@ app.post("/connect-simplefin", async (req, res) => {
         .input("name", sql.NVarChar(255), account.name)
         .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
         .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0) // TODO: May deprecate in futue
+        .input("balanceDate", sql.DateTime, account["balance-date"] ? new Date(account["balance-date"] * 1000) : null)
         .query(`
           IF NOT EXISTS (
               SELECT 1 FROM DebitAccounts WHERE id = @id
@@ -944,8 +945,8 @@ app.post("/connect-simplefin", async (req, res) => {
               SELECT 1 FROM OtherAccounts WHERE id = @id
           )
           BEGIN
-              INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance)
-              VALUES (@id, @userID, @name, @acctBalance, @activeBalance)
+              INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance, balanceDate)
+              VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @balanceDate
           END 
         `);
       });
