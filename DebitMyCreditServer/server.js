@@ -947,16 +947,16 @@ app.post("/connect-simplefin", async (req, res) => {
               SET name = @name,
                   acctBalance = @acctBalance,
                   activeBalance = @activeBalance,
-                  balanceDate = @balanceDate
+                  balanceDate = @balanceDate,
+                  updatedAt = SYSUTCDATETIME()
             WHERE id = @id;
 
             IF @@ROWCOUNT = 0
             BEGIN
               UPDATE CreditAccounts
                 SET name = @name,
-                    acctBalance = @acctBalance,
-                    activeBalance = @activeBalance,
-                    balanceDate = @balanceDate
+                    balanceDate = @balanceDate,
+                    updatedAt = SYSUTCDATETIME()
               WHERE id = @id;
             END
 
@@ -966,7 +966,8 @@ app.post("/connect-simplefin", async (req, res) => {
                 SET name = @name,
                     acctBalance = @acctBalance,
                     activeBalance = @activeBalance,
-                    balanceDate = @balanceDate
+                    balanceDate = @balanceDate,
+                    updatedAt = SYSUTCDATETIME()
               WHERE id = @id;
             END
 
