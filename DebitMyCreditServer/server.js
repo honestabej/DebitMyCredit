@@ -965,6 +965,41 @@ app.post("/connect-simplefin", async (req, res) => {
   } 
 });
 
+// Remove a user's simplefin credentials
+app.post("/remove-simplefin", async (req, res) => {
+  try {
+    const { userID } = req.body;
+    if (!userID ) return res.status(400).json({ error: "userID required" });
+
+    // Connect to Azure DB
+    const pool = await sql.connect(azureConfig);
+
+    // Insert the encrypted credentials with thefollowing query
+    await safeQuery(async () => {
+      return pool.request()
+      .input("id", sql.VarChar(50), userID)
+      .query(`
+        UPDATE Users
+        SET
+          simpleFinUsernameData = NULL,
+          simpleFinUsernameIV = NULL,
+          simpleFinUsernameTag = NULL,
+          simpleFinPasswordData = NULL,
+          simpleFinPasswordIV = NULL,
+          simpleFinPasswordTag = NULL
+          updatedAt = SYSUTCDATETIME()
+        WHERE id=@id
+      `);
+    });   
+
+    return res.json({ success: true, message: "SimpleFIN credentials removed"});
+
+  } catch (e) {
+    console.error("/remove-simplefin returned the following error: ", e);
+    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } 
+});
+
 // Initiate a call to simpleFin to get all available accounts
 app.get("/get-simplefin-accounts", async (req, res) => {
     try { 
