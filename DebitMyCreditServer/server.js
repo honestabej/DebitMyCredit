@@ -927,7 +927,11 @@ app.post("/connect-simplefin", async (req, res) => {
 
     // Save the user's accounts to otherAccounts
     for (const account of response.data.accounts) {
-      console.log(account)
+      
+      const balanceDate = account["balance-date"] 
+        ? new Date(account["balance-date"] * 1000) 
+        : null;
+
       // If the account not exist on any accounts table, add it to the OtherAccounts table
       await safeQuery(async () => {
         return pool.request()
@@ -936,7 +940,7 @@ app.post("/connect-simplefin", async (req, res) => {
         .input("name", sql.NVarChar(255), account.name)
         .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
         .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0) // TODO: May deprecate in futue
-        .input("balanceDate", sql.DateTimeOffset, account["balance-date"] ? new Date(account["balance-date"] * 1000) : null)
+        .input("balanceDate", sql.DateTimeOffset, balanceDate)
         .query(`
           IF NOT EXISTS (
               SELECT 1 FROM DebitAccounts WHERE id = @id
