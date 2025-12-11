@@ -946,7 +946,7 @@ app.post("/connect-simplefin", async (req, res) => {
           )
           BEGIN
               INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance, balanceDate)
-              VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @balanceDate
+              VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @balanceDate)
           END 
         `);
       });
