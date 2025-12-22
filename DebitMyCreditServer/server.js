@@ -928,7 +928,19 @@ app.post("/connect-simplefin", async (req, res) => {
 
     }    
 
-    return res.json({ success: true, message: "SimpleFIN credentials saved and SimpleFIN accessed successfully!"});
+    // After all updates, fetch all accounts for this user
+    const userAccounts = await safeQuery(async () => {
+      return pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT name, accountBalance, activeBalance, accountType, balanceDate, createdAt, updatedAt FROM Accounts WHERE userID = @userID`);
+    });
+
+    // Return accounts in response
+    return res.json({
+      success: true,
+      message: "SimpleFIN credentials saved and SimpleFIN accessed successfully!",
+      accounts: userAccounts.recordset
+    });
 
   } catch (e) {
     console.error("/connect-simplefin returned the following error: ", e);
