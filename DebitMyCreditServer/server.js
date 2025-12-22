@@ -932,7 +932,7 @@ app.post("/connect-simplefin", async (req, res) => {
     const userAccounts = await safeQuery(async () => {
       return pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
-        .query(`SELECT name, accountBalance, activeBalance, accountType, balanceDate, createdAt, updatedAt FROM Accounts WHERE userID = @userID`);
+        .query(`SELECT id, name, accountBalance, activeBalance, accountType, balanceDate, createdAt, updatedAt FROM Accounts WHERE userID = @userID`);
     });
 
     // Return accounts in response
