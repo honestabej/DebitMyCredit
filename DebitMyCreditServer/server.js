@@ -1261,7 +1261,7 @@ app.get("/get-all-accounts", async (req, res) => {
     const result = await safeQuery(async () => {
       return pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
-        .query(`SELECT * FROM Accounts WHERE userID = @userID`);
+        .query(`SELECT id, name, accountBalance, activeBalance, accountType, balanceDate, createdAt, updatedAt FROM Accounts WHERE userID = @userID`);
     });
 
     const allAccounts = result.recordset;
