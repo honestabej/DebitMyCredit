@@ -185,39 +185,6 @@ async function fetchSimpleFinData(userID) {
   return response.data.accounts || [];
 }
 
-// Iterates through the JSON SimpleFin object and adds any new accounts to the Azure DB
-async function importNewAccounts(userID, accounts) {
-  if (!accounts || !accounts.length) return 0;
-
-  const pool = await sql.connect(azureConfig);
-  let insertedCount = 0;
-
-  for (const acc of accounts) {
-    const result = await pool.request()
-      .input("id", sql.VarChar(50), acc.id)
-      .input("userID", sql.UniqueIdentifier, userID)
-      .input("name", sql.VarChar(255), acc.name)
-      .input("acctBalance", sql.Decimal(18, 2), parseFloat(acc["available-balance"]))
-      .input("activeBalance", sql.Decimal(18, 2), parseFloat(acc["available-balance"]))
-      .input("isDebit", sql.Bit, null)
-      .query(`
-        IF NOT EXISTS (SELECT 1 FROM Accounts WHERE id = @id)
-        BEGIN
-            INSERT INTO Accounts (id, userID, name, acctBalance, activeBalance, isDebit)
-            VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @isDebit);
-        END
-        SELECT @@ROWCOUNT AS affectedRows;
-      `);
-
-    // Only increment if a row was actually inserted
-    if (result.recordset[0].affectedRows > 0) {
-      insertedCount += 1;
-    }
-  }
-
-  return insertedCount;
-}
-
 // Iterates through the JSON SimpleFin object and updates the balances of all debit acocounts
 async function updateDebitAccountBalances(userID, accounts) {
   if (!accounts || !accounts.length) return 0;
@@ -228,8 +195,8 @@ async function updateDebitAccountBalances(userID, accounts) {
   // Get debit accounts from the Azure DB
   const debitAccounts = await safeQuery(async () => {
     return pool.request()
-    .input("userID", sql.VarChar(50), userID)
-    .query(`SELECT id, acctBalance, updatedAt FROM DebitAccounts WHERE userID = @userID`);
+    .input("userID", sql.UniqueIdentifier, userID)
+    .query(`SELECT id, accountBalance, updatedAt FROM Accounts WHERE userID = @userID AND accountType = 'Debit'`);
   });
 
   // Create a map of the debit accounts and their account balances
@@ -237,11 +204,11 @@ async function updateDebitAccountBalances(userID, accounts) {
   debitAccounts.recordset.forEach(acc => debitAccountsMap.set(acc.id, acc));
 
   // Keep track of how many account balances were updated
-  let acctBalanceUpdateCt = 0
+  let accountBalanceUpdateCt = 0
 
   // Loop through all of the simpleFin accounts
   for (const account of accounts) {
-    // Skip if the DebitAccounts table does not have this simpleFin account
+    // Skip if the Accounts table does not have this simpleFin account
     if (!debitAccountsMap.has(account.id)) continue;
 
     const dbAccount = debitAccountsMap.get(account.id);
@@ -259,23 +226,23 @@ async function updateDebitAccountBalances(userID, accounts) {
         return pool.request()
         .input("id", sql.VarChar(50), account.id)
         .input("activeBalance", sql.Decimal(18, 2), simpleFinBalance) // Keeping synced for now, may change
-        .input("acctBalance", sql.Decimal(18, 2), simpleFinBalance) 
+        .input("accountBalance", sql.Decimal(18, 2), simpleFinBalance) 
         .input("balanceDate", sql.DateTimeOffset, simpleFinBalanceDate)
         .query(`
-            UPDATE DebitAccounts
+            UPDATE Accounts
             SET activeBalance = @activeBalance,
-                acctBalance = @acctBalance,
+                accountBalance = @accountBalance,
                 balanceDate = @balanceDate,
                 updatedAt = SYSUTCDATETIME()
             WHERE id = @id
         `);
       });
 
-      acctBalanceUpdateCt += 1;
+      accountBalanceUpdateCt += 1;
     }
   }
   
-  return acctBalanceUpdateCt;
+  return accountBalanceUpdateCt;
 }
 
 // Iterates through the JSON SimpleFin object and adds any new transactions from credit card accounts to the Azure DB
@@ -289,7 +256,7 @@ async function importNewTransactions(userID, accounts) {
   const creditAccounts = await safeQuery(async () => {
     return pool.request()
     .input("userID", sql.VarChar(50), userID)
-    .query(`SELECT id FROM CreditAccounts WHERE userID = @userID`);
+    .query(`SELECT id FROM Accounts WHERE userID = @userID AND accountType = 'Credit'`);
   });
   const creditAccountIds = new Set(creditAccounts.recordset.map(row => row.id));
 
@@ -303,41 +270,55 @@ async function importNewTransactions(userID, accounts) {
   });
   const existingTransactionIds = new Set(existingTransactions.recordset.map(row => row.id));
 
-  // Keep track of how many transactions were inserted
-  let insertedTransactionsCt = 0;
+  // Collect all new transactions to insert
+  const newTransactions = [];
 
-  // Loop through all of the simpleFin accounts
   for (const account of accounts) {
-    // Skip if the CreditAccounts table does not have this simpleFin account
     if (!creditAccountIds.has(account.id)) continue;
     if (!account.transactions || !account.transactions.length) continue;
 
-    // Loop though the transactions of the account
     for (const transaction of account.transactions) {
-      // Skip if already exists
       if (existingTransactionIds.has(transaction.id)) continue;
 
-      // Insert new transaction
-      await safeQuery(async () => {
-        return pool.request()
-        .input("id", sql.VarChar(50), transaction.id)
-        .input("userID", sql.VarChar(50), userID)
-        .input("creditAccountID", sql.VarChar(50), account.id)
-        .input("name", sql.NVarChar(255), transaction.description || transaction.payee || "Unknown")
-        .input("amount", sql.Decimal(18, 2), parseFloat(transaction.amount))
-        .input("transactionDate", sql.DateTimeOffset, new Date(transaction.posted * 1000))
-        .input("notes", sql.NVarChar(sql.MAX), transaction.memo || "")
-        .query(`
-          INSERT INTO Transactions (id, userID, creditAccountID, name, amount, transactionDate, notes)
-          VALUES (@id, @userID, @creditAccountID, @name, @amount, @transactionDate, @notes)
-        `);
+      newTransactions.push({
+        id: transaction.id,
+        userID,
+        creditAccountID: account.id,
+        name: transaction.description || transaction.payee || "Unknown",
+        amount: parseFloat(transaction.amount),
+        transactionDate: new Date(transaction.posted * 1000),
+        notes: transaction.memo || ""
       });
-
-      insertedTransactionsCt++;
     }
   }
 
-  return insertedTransactionsCt;
+  // Insert all new transactions in a single query using a table-valued parameter
+  if (newTransactions.length > 0) {
+    const table = new sql.Table();
+    table.columns.add("id", sql.VarChar(50), { nullable: false });
+    table.columns.add("userID", sql.UniqueIdentifier, { nullable: false });
+    table.columns.add("creditAccountID", sql.VarChar(50), { nullable: false });
+    table.columns.add("name", sql.NVarChar(255), { nullable: false });
+    table.columns.add("amount", sql.Decimal(18, 2), { nullable: false });
+    table.columns.add("transactionDate", sql.DateTimeOffset, { nullable: false });
+    table.columns.add("notes", sql.NVarChar(sql.MAX), { nullable: false });
+
+    newTransactions.forEach(tx => {
+      table.rows.add(tx.id, tx.userID, tx.creditAccountID, tx.name, tx.amount, tx.transactionDate, tx.notes);
+    });
+
+    await safeQuery(async () => {
+      return pool.request()
+        .input("transactions", table)
+        .query(`
+          INSERT INTO Transactions (id, userID, creditAccountID, name, amount, transactionDate, notes)
+          SELECT id, userID, creditAccountID, name, amount, transactionDate, notes
+          FROM @transactions
+        `);
+    });
+  }
+
+  return newTransactions.length;
 }
 
 async function syncUser(clientUser) {
@@ -401,8 +382,8 @@ async function syncDebitAccounts(userID, clientAccounts) {
     .input("userID", sql.UniqueIdentifier, userID)
     .query(`
       SELECT id, updatedAt
-      FROM DebitAccounts
-      WHERE userID = @userID
+      FROM accounts
+      WHERE userID = @userID AND accountType = 'Debit'
     `);
   });
 
@@ -427,10 +408,12 @@ async function syncDebitAccounts(userID, clientAccounts) {
         return pool.request()
         .input("id", sql.VarChar(50), clientAcc.id)
         .input("name", sql.NVarChar(255), clientAcc.name)
+        .input("type", sql.NVarChar(10), clientAcc.accountType)
         .query(`
-          UPDATE DebitAccounts
+          UPDATE Accounts
           SET 
             name = @name,
+            accountType = @type,
             updatedAt = SYSUTCDATETIME()
           WHERE id = @id
         `);
@@ -443,9 +426,9 @@ async function syncDebitAccounts(userID, clientAccounts) {
     return pool.request()
     .input("userID", sql.UniqueIdentifier, userID)
     .query(`
-      SELECT id, name, acctBalance, activeBalance, balanceDate, updatedAt
-      FROM DebitAccounts
-      WHERE userID = @userID
+      SELECT id, name, accountBalance, activeBalance, balanceDate, updatedAt
+      FROM Accounts
+      WHERE userID = @userID AND accountType = 'Debit'
     `);
   });
 
@@ -516,11 +499,11 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
           await safeQuery(async () => {
             return pool.request()
             .input("transactionID", sql.VarChar(50), clientTx.id)
-            .input("debitAccountID", sql.VarChar(50), alloc.debitAccountID)
+            .input("accountID", sql.VarChar(50), alloc.accountID)
             .input("amount", sql.Decimal(18,2), alloc.amount)
             .query(`
-              INSERT INTO TransactionAllocations (transactionID, debitAccountID, amount)
-              VALUES (@transactionID, @debitAccountID, @amount)
+              INSERT INTO TransactionAllocations (transactionID, accountID, amount)
+              VALUES (@transactionID, @accountID, @amount)
             `);
           });
         }
@@ -805,23 +788,6 @@ app.post("/register", async (req, res) => {
 
     const newUser = newUserResult.recordset[0];
 
-    // const newTransferGroupResult = await safeQuery(async () => {
-    //   return pool.request()
-    //     .input("tgid", sql.VarChar(50), tgid)
-    //     .query(`
-    //       SELECT 
-    //         id,
-    //         userID,
-    //         name,
-    //         createdAt,
-    //         updatedAt
-    //       FROM TransferGroups
-    //       WHERE id = @tgid
-    //     `);
-    // });
-
-    // const newTransferGroup = newTransferGroupResult.recordset[0];
-
     res.json({ 
       success: true, 
       message: `New user registered`,
@@ -932,50 +898,30 @@ app.post("/connect-simplefin", async (req, res) => {
         ? new Date(account["balance-date"] * 1000) 
         : null;
 
-      // If the account not exist on any accounts table, add it to the OtherAccounts table
+      // Add the account if it doesnt exist, update it if it does
       await safeQuery(async () => {
         return pool.request()
           .input("id", sql.VarChar(50), account.id)
           .input("userID", sql.UniqueIdentifier, userID)
           .input("name", sql.NVarChar(255), account.name)
-          .input("acctBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+          .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
           .input("activeBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
           .input("balanceDate", sql.DateTimeOffset, balanceDate)
           .query(`
-            -- Try to update the account IN WHICHEVER TABLE IT EXISTS
-            UPDATE DebitAccounts
-              SET name = @name,
-                  acctBalance = @acctBalance,
-                  activeBalance = @activeBalance,
-                  balanceDate = @balanceDate,
-                  updatedAt = SYSUTCDATETIME()
+            -- Try to update the account if it exists
+            UPDATE Accounts
+            SET name = @name,
+                accountBalance = @accountBalance,
+                activeBalance = @activeBalance,
+                balanceDate = @balanceDate,
+                updatedAt = SYSUTCDATETIME()
             WHERE id = @id;
 
+            -- If no rows were updated, insert a new account with Type = 'None'
             IF @@ROWCOUNT = 0
             BEGIN
-              UPDATE CreditAccounts
-                SET name = @name,
-                    balanceDate = @balanceDate,
-                    updatedAt = SYSUTCDATETIME()
-              WHERE id = @id;
-            END
-
-            IF @@ROWCOUNT = 0
-            BEGIN
-              UPDATE OtherAccounts
-                SET name = @name,
-                    acctBalance = @acctBalance,
-                    activeBalance = @activeBalance,
-                    balanceDate = @balanceDate,
-                    updatedAt = SYSUTCDATETIME()
-              WHERE id = @id;
-            END
-
-            -- If still not found anywhere, insert into OtherAccounts
-            IF @@ROWCOUNT = 0
-            BEGIN
-              INSERT INTO OtherAccounts (id, userID, name, acctBalance, activeBalance, balanceDate)
-              VALUES (@id, @userID, @name, @acctBalance, @activeBalance, @balanceDate)
+              INSERT INTO Accounts (id, userID, name, accountBalance, activeBalance, balanceDate, Type, createdAt, updatedAt)
+              VALUES (@id, @userID, @name, @accountBalance, @activeBalance, @balanceDate, 'None', SYSUTCDATETIME(), SYSUTCDATETIME())
             END
           `);
       });
@@ -1043,74 +989,74 @@ app.get("/get-simplefin-accounts", async (req, res) => {
   }
 });
 
-// Insert new accounts into the Azure DB
-app.post("/insert-accounts", async (req, res) => {
-  try { 
-    const { userID, debitAccounts, creditAccounts } = req.body;
-    if (!userID) return res.status(400).json({ error: "No userID provided" });
+// // Insert new accounts into the Azure DB
+// app.post("/insert-accounts", async (req, res) => {
+//   try { 
+//     const { userID, debitAccounts, creditAccounts } = req.body;
+//     if (!userID) return res.status(400).json({ error: "No userID provided" });
 
-    // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+//     // Connect to Azure DB
+//     const pool = await sql.connect(azureConfig);
 
-    let insertedDebitCount = 0;
-    let insertedCreditCount = 0;
+//     let insertedDebitCount = 0;
+//     let insertedCreditCount = 0;
 
-    // Insert the debitAccounts to the Azure DB
-    if (debitAccounts && debitAccounts.length) {
-      for (const debitAccount of debitAccounts) {
-        // Use IF NOT EXISTS to prevent duplicates
-        await safeQuery(async () => {
-          return pool.request()
-          .input("id", sql.VarChar(50), debitAccount.id)
-          .input("userID", sql.UniqueIdentifier, userID)
-          .input("name", sql.NVarChar(255), debitAccount.name)
-          .input("acctBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0)
-          .input("activeBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0) // TODO: May deprecate in futue
-          .query(`
-            IF NOT EXISTS (SELECT 1 FROM DebitAccounts WHERE id = @id)
-            BEGIN
-              INSERT INTO DebitAccounts (id, userID, name, acctBalance, activeBalance)
-              VALUES (@id, @userID, @name, @acctBalance, @activeBalance)
-            END 
-          `);
-        });
+//     // Insert the debitAccounts to the Azure DB
+//     if (debitAccounts && debitAccounts.length) {
+//       for (const debitAccount of debitAccounts) {
+//         // Use IF NOT EXISTS to prevent duplicates
+//         await safeQuery(async () => {
+//           return pool.request()
+//           .input("id", sql.VarChar(50), debitAccount.id)
+//           .input("userID", sql.UniqueIdentifier, userID)
+//           .input("name", sql.NVarChar(255), debitAccount.name)
+//           .input("accountBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0)
+//           .input("activeBalance", sql.Decimal(18, 2), parseFloat(debitAccount["available-balance"]) || 0) // TODO: May deprecate in futue
+//           .query(`
+//             IF NOT EXISTS (SELECT 1 FROM DebitAccounts WHERE id = @id)
+//             BEGIN
+//               INSERT INTO DebitAccounts (id, userID, name, accountBalance, activeBalance)
+//               VALUES (@id, @userID, @name, @accountBalance, @activeBalance)
+//             END 
+//           `);
+//         });
 
-        insertedDebitCount++;
-      }
-    }
+//         insertedDebitCount++;
+//       }
+//     }
 
-    // Insert the creditAccounts to the Azure DB
-    if (creditAccounts && creditAccounts.length) {
-      for (const acc of creditAccounts) {
-        await safeQuery(async () => {
-          return pool.request()
-          .input("id", sql.VarChar(50), acc.id)
-          .input("userID", sql.UniqueIdentifier, userID)
-          .input("name", sql.NVarChar(255), acc.name)
-          .query(`
-            IF NOT EXISTS (SELECT 1 FROM CreditAccounts WHERE id = @id)
-            BEGIN
-              INSERT INTO CreditAccounts (id, userID, name)
-              VALUES (@id, @userID, @name)
-            END
-          `);
-        });
+//     // Insert the creditAccounts to the Azure DB
+//     if (creditAccounts && creditAccounts.length) {
+//       for (const acc of creditAccounts) {
+//         await safeQuery(async () => {
+//           return pool.request()
+//           .input("id", sql.VarChar(50), acc.id)
+//           .input("userID", sql.UniqueIdentifier, userID)
+//           .input("name", sql.NVarChar(255), acc.name)
+//           .query(`
+//             IF NOT EXISTS (SELECT 1 FROM CreditAccounts WHERE id = @id)
+//             BEGIN
+//               INSERT INTO CreditAccounts (id, userID, name)
+//               VALUES (@id, @userID, @name)
+//             END
+//           `);
+//         });
 
-        insertedCreditCount++;
-      }
-    }
+//         insertedCreditCount++;
+//       }
+//     }
 
-    return res.json({
-      success: true,
-      insertedDebitAccounts: insertedDebitCount,
-      insertedCreditAccounts: insertedCreditCount
-    });
+//     return res.json({
+//       success: true,
+//       insertedDebitAccounts: insertedDebitCount,
+//       insertedCreditAccounts: insertedCreditCount
+//     });
     
-  } catch(e) {
-    console.error("/insert-accounts returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
-  }
-});
+//   } catch(e) {
+//     console.error("/insert-accounts returned the following error: ", e);
+//     return res.status(500).json({ success: false, message: "Server error, please try again later" });
+//   }
+// });
 
 // Initiate a call to simpleFin to populate Azure DB with most recent account balances and transactions (NOTE: Runs automatically every x hours to keep Azure DB up to date)
 app.post("/sync-simplefin-data", async (req, res) => {
@@ -1125,7 +1071,7 @@ app.post("/sync-simplefin-data", async (req, res) => {
     if (!simpleFinResponse.length) return res.status(400).json({ success: false, error: "Error retrieving accounts from simpleFin" });
 
     // Update balances of existing accounts in the Azure DB
-    const acctBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
+    const accountBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
 
     // Add any transactions to the Azure DB
     const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
@@ -1144,7 +1090,7 @@ app.post("/sync-simplefin-data", async (req, res) => {
     });
 
     // Return a message to the user 
-    return res.json({ success: true, message: "New SimpleFin data synced to DB. "+acctBalanceUpdateCt+" account balances updated, and "+insertedTransactionsCt+" transactions imported." });
+    return res.json({ success: true, message: "New SimpleFin data synced to DB. "+accountBalanceUpdateCt+" account balances updated, and "+insertedTransactionsCt+" transactions imported." });
     
   } catch(e) {
     console.error("/sync-simplefin-data returned the following error: ", e);
@@ -1277,7 +1223,7 @@ app.get("/get-debit-accounts", async (req, res) => {
     const result = await safeQuery(async () => {
       return pool.request()
       .input("userID", sql.VarChar(50), userID)
-      .query(`SELECT * FROM DebitAccounts WHERE userID = @userID`);
+      .query(`SELECT * FROM Accounts WHERE userID = @userID AND accountType = 'Debit'`);
     });
 
     return res.json({ success: true, result: result });
@@ -1291,7 +1237,7 @@ app.get("/get-debit-accounts", async (req, res) => {
 // Get all user accounts (debit, credit, other)
 app.get("/get-all-accounts", async (req, res) => {
   try {
-    const userID = req.query.userID; // or req.query.userID if you're using query params
+    const userID = req.query.userID;
     if (!userID) {
       return res.status(400).json({ success: false, error: "userID required" });
     }
@@ -1299,39 +1245,25 @@ app.get("/get-all-accounts", async (req, res) => {
     // Connect to Azure DB
     const pool = await sql.connect(azureConfig);
 
-    // Run all three queries safely
+    // Query all accounts for this user
     const result = await safeQuery(async () => {
-      const debitQuery = pool.request()
-        .input("userID", sql.VarChar(50), userID)
-        .query(`SELECT * FROM DebitAccounts WHERE userID = @userID`);
-
-      const creditQuery = pool.request()
-        .input("userID", sql.VarChar(50), userID)
-        .query(`SELECT * FROM CreditAccounts WHERE userID = @userID`);
-
-      const otherQuery = pool.request()
-        .input("userID", sql.VarChar(50), userID)
-        .query(`SELECT * FROM OtherAccounts WHERE userID = @userID`);
-
-      // Run in parallel for speed
-      const [debitResult, creditResult, otherResult] = await Promise.all([
-        debitQuery,
-        creditQuery,
-        otherQuery
-      ]);
-
-      return {
-        debitAccounts: debitResult.recordset,
-        creditAccounts: creditResult.recordset,
-        otherAccounts: otherResult.recordset
-      };
+      return pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT * FROM Accounts WHERE userID = @userID`);
     });
+
+    const allAccounts = result.recordset;
+
+    // Separate accounts by type
+    const debitAccounts = allAccounts.filter(acc => acc.accountType === "Debit");
+    const creditAccounts = allAccounts.filter(acc => acc.accountType === "Credit");
+    const otherAccounts = allAccounts.filter(acc => acc.accountType !== "Debit" && acc.accountType !== "Credit");
 
     return res.json({
       success: true,
-      debitAccounts: result.debitAccounts,
-      creditAccounts: result.creditAccounts,
-      otherAccounts: result.otherAccounts
+      debitAccounts,
+      creditAccounts,
+      otherAccounts
     });
 
   } catch (e) {
@@ -1425,33 +1357,6 @@ app.post("/update-user-email", async (req, res) => {
 // Update an account
 app.post("/update-debit-account-name", async (req, res) => {
 
-  try {
-    const { id, name } = req.body;
-
-    if (!id || !name) {
-      return res.status(400).json({ error: "Missing required field" });
-    }
-
-    // Update the user's email
-    await safeQuery(async () => {
-      return pool.request()
-      .input("id", sql.UniqueIdentifier, id)
-      .input("name", sql.VarChar(255), name)
-      .query(`
-        UPDATE Users
-        SET 
-          name = @name,
-          updatedAt = SYSUTCDATETIME()
-        WHERE id = @id
-      `);
-    });
-
-    res.json({success: true, message: "Account name updated"});
-
-  } catch (e) {
-    console.error("/update-debit-account-name returned the following error: ", e);
-    res.status(500).json({ success: false, message: "Server error, please try again later" });
-  }
 });
 
 // Update a transaction
