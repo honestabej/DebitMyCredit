@@ -917,7 +917,7 @@ app.post("/connect-simplefin", async (req, res) => {
                 updatedAt = SYSUTCDATETIME()
             WHERE id = @id;
 
-            -- If no rows were updated, insert a new account with Type = 'None'
+            -- If no rows were updated, insert a new account with accountType = 'None'
             IF @@ROWCOUNT = 0
             BEGIN
               INSERT INTO Accounts (id, userID, name, accountBalance, activeBalance, balanceDate, Type, createdAt, updatedAt)
