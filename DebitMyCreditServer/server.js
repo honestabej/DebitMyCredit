@@ -898,7 +898,7 @@ app.post("/connect-simplefin", async (req, res) => {
         ? new Date(account["balance-date"] * 1000) 
         : null;
 
-      print("\n\nTHE USERID IS: "+userID+"\n\n")
+      console.log("\n\nTHE USERID IS: "+userID+"\n\n")
 
       // Add the account if it doesnt exist, update it if it does
       await safeQuery(async () => {
