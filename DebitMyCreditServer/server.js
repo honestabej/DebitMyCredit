@@ -1254,16 +1254,9 @@ app.get("/get-all-accounts", async (req, res) => {
 
     const allAccounts = result.recordset;
 
-    // Separate accounts by type
-    const debitAccounts = allAccounts.filter(acc => acc.accountType === "Debit");
-    const creditAccounts = allAccounts.filter(acc => acc.accountType === "Credit");
-    const otherAccounts = allAccounts.filter(acc => acc.accountType !== "Debit" && acc.accountType !== "Credit");
-
     return res.json({
       success: true,
-      debitAccounts,
-      creditAccounts,
-      otherAccounts
+      allAccounts
     });
 
   } catch (e) {
