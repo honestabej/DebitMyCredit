@@ -1131,6 +1131,7 @@ app.post("/sync-simplefin-data", async (req, res) => {
     const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
 
     // Set the lastSimpleFinSync time for the user
+    const pool = await sql.connect(azureConfig);
     await safeQuery(async () => {
       return pool.request()
         .input("userID", sql.VarChar(50), userID)
