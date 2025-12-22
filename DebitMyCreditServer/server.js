@@ -1359,6 +1359,48 @@ app.post("/update-user-email", async (req, res) => {
   }
 });
 
+// Update an account type
+app.post("/update-account-types", async (req, res) => {
+  try {
+    const { userID, updates } = req.body;
+
+    if (!userID || !updates || !Array.isArray(updates)) {
+      return res.status(400).json({ success: false, message: "Invalid request body" });
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, message: "No updates provided" });
+    }
+
+    const pool = await sql.connect(azureConfig);
+
+    for (const update of updates) {
+      const { accountID, accountType } = update;
+
+      if (!accountID || !accountType) continue; // skip invalid entries
+
+      await safeQuery(async () => {
+        return pool.request()
+          .input("accountID", sql.VarChar(50), accountID)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("accountType", sql.VarChar(10), accountType)
+          .query(`
+            UPDATE Accounts
+            SET accountType = @accountType,
+                updatedAt = SYSUTCDATETIME()
+            WHERE id = @accountID AND userID = @userID
+          `);
+      });
+    }
+
+    return res.json({ success: true, message: "Account types updated successfully." });
+
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 // Update an account
 app.post("/update-debit-account-name", async (req, res) => {
 
