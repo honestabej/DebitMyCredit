@@ -345,9 +345,9 @@ async function syncUser(clientUser) {
     // Update the server with client-provided fields
     await safeQuery(async () => {
       return pool.request()
-      .input("id", sql.UniqueIdentifier, userID)
-      .input("email", sql.VarChar(255), email)
-      .input("fetchFrequency", sql.Int, fetchFrequency)
+      .input("id", sql.UniqueIdentifier, clientUser.userID)
+      .input("email", sql.VarChar(255), clientUser.email)
+      .input("fetchFrequency", sql.Int, clientUser.fetchFrequency)
       .query(`
         UPDATE Users
         SET 
@@ -470,7 +470,7 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
       await safeQuery(async () => {
         return pool.request()
         .input("id", sql.VarChar(50), clientTx.id)
-        .input("notes", sql.NVarChar(sql.MAX), clientTx.memo || "")
+        .input("notes", sql.NVarChar(sql.MAX), clientTx.notes || "")
         .input("transferGroupID", sql.UniqueIdentifier, clientTx.transferGroupID || null)
         .input("updatedAt", sql.DateTimeOffset, clientUpdated)
         .query(`
@@ -923,6 +923,11 @@ app.post("/connect-simplefin", async (req, res) => {
               INSERT INTO Accounts (id, userID, name, accountBalance, activeBalance, balanceDate, accountType, createdAt, updatedAt)
               VALUES (@id, @userID, @name, @accountBalance, @activeBalance, @balanceDate, 'N/A', SYSUTCDATETIME(), SYSUTCDATETIME())
             END
+
+            -- Update the user's lastSimpleFinSync
+            UPDATE Users
+            SET lastSimpleFinSync = SYSUTCDATETIME()
+            WHERE id = @userID
           `);
       });
 
@@ -935,11 +940,24 @@ app.post("/connect-simplefin", async (req, res) => {
         .query(`SELECT id, name, accountBalance, activeBalance, accountType, balanceDate, createdAt, updatedAt FROM Accounts WHERE userID = @userID`);
     });
 
+    // Return the lastSimpleFinSync value
+    const lastSimpleFinSyncResult = await safeQuery(async () => {
+      return pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT lastSimpleFinSync FROM Users WHERE id = @userID`);
+    });
+
+    const lastSimpleFinSync =
+    lastSimpleFinSyncResult.recordset.length > 0
+      ? lastSimpleFinSyncResult.recordset[0].lastSimpleFinSync
+      : null;
+
     // Return accounts in response
     return res.json({
       success: true,
       message: "SimpleFIN credentials saved and SimpleFIN accessed successfully!",
-      accounts: userAccounts.recordset
+      accounts: userAccounts.recordset,
+      lastSimpleFinSync
     });
 
   } catch (e) {
@@ -1069,6 +1087,7 @@ app.get("/get-simplefin-accounts", async (req, res) => {
 //     return res.status(500).json({ success: false, message: "Server error, please try again later" });
 //   }
 // });
+
 
 // Initiate a call to simpleFin to populate Azure DB with most recent account balances and transactions (NOTE: Runs automatically every x hours to keep Azure DB up to date)
 app.post("/sync-simplefin-data", async (req, res) => {
