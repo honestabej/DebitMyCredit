@@ -54,38 +54,84 @@ async function hashPassword(plain) {
   return bcrypt.hash(plain, salt);
 }
 
-// Send a call to the Azure DB to wake up on server start
-async function wakeDatabase() {
-  try {
-    console.log("Waking Azure DB...");
-    const pool = await sql.connect(azureConfig);
-    await pool.request().query("SELECT 1");
-    console.log("Azure DB is awake.");
-  } catch (err) {
-    console.error("Failed to wake Azure DB:", err);
+// Detect transient errors indicating Azure DB is asleep or overloaded
+function isAzureTransientError(err) {
+  const transientErrorNumbers = [40613, 40197, 40501];
+
+  return (
+    transientErrorNumbers.includes(err?.number) ||
+    err?.code === "ETIMEOUT" ||
+    err?.code === "ECONNCLOSED" ||
+    err?.message?.toLowerCase().includes("timeout") ||
+    err?.message?.toLowerCase().includes("unavailable")
+  );
+}
+
+// Error we throw to notify the client immediately
+class DatabaseSleepingError extends Error {
+  constructor() {
+    super("Database is waking up");
+    this.code = "DB_SLEEPING";
   }
 }
 
-// Wrapper function to ensure Azure DB is awake before sending any requests
-async function safeQuery(work, maxRetries = 5, baseDelay = 2000) {
-  let attempt = 0;
+// Polling function to wake Azure DB
+async function wakeDatabase(maxWaitMs = 90_000, pollIntervalMs = 5_000) {
+  console.log("Attempting to wake Azure SQL Database...");
 
-  while (attempt < maxRetries) {
+  const start = Date.now();
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const pool = await sql.connect(azureConfig);
+      await pool.request().query("SELECT 1");
+      console.log("Azure DB is awake.");
+      return;
+    } catch (err) {
+      console.log("DB still waking... retrying in a few seconds");
+      await new Promise(r => setTimeout(r, pollIntervalMs));
+    }
+  }
+
+  throw new Error("Azure SQL did not wake within expected time.");
+}
+
+// Main wrapper for all queries
+async function safeQuery(work, options = {}) {
+  const { maxRetries = 4, initialDelayMs = 2000, maxWakeMs = 90_000 } = options;
+
+  let attempt = 0;
+  let firstSleepNotified = false;
+
+  while (true) {
     try {
       return await work();
     } catch (err) {
       attempt++;
-      console.warn(`Attempt ${attempt} failed: ${err.message}`);
 
-      if (attempt >= maxRetries) {
-          throw err; // Give up after maxRetries
+      // If not a transient Azure error, throw immediately
+      if (!isAzureTransientError(err)) {
+        throw err;
       }
 
-      await wakeDatabase();
+      // Notify the client immediately on the first sleep error
+      if (!firstSleepNotified) {
+        firstSleepNotified = true;
+        throw new DatabaseSleepingError();
+      }
 
-      // Exponential backoff: wait longer each retry
-      const delay = baseDelay * Math.pow(2, attempt - 1);
-      console.log(`Waiting ${delay}ms before retrying...`);
+      // Give up after max retries
+      if (attempt > maxRetries) {
+        throw err;
+      }
+
+      // Attempt to wake the database
+      console.log(`Attempt ${attempt}: DB sleeping, waking...`);
+      await wakeDatabase(maxWakeMs);
+
+      // Exponential backoff delay before retry
+      const delay = initialDelayMs * Math.pow(2, attempt - 1);
+      console.log(`Retrying query in ${delay}ms...`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -794,9 +840,8 @@ app.post("/register", async (req, res) => {
       user: newUser
     });
 
-  } catch (e) {
-    console.error("/register returned the following error: ", e);
-    res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -838,9 +883,8 @@ app.post("/login", async (req, res) => {
       return res.json({ success: true, user: { ...user, simpleFinCredentialsSet }});
     }
 
-  } catch (e) {
-    console.error("/login returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -960,9 +1004,8 @@ app.post("/connect-simplefin", async (req, res) => {
       lastSimpleFinSync
     });
 
-  } catch (e) {
-    console.error("/connect-simplefin returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   } 
 });
 
@@ -995,9 +1038,8 @@ app.post("/remove-simplefin", async (req, res) => {
 
     return res.json({ success: true, message: "SimpleFIN credentials removed"});
 
-  } catch (e) {
-    console.error("/remove-simplefin returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   } 
 });
 
@@ -1013,9 +1055,8 @@ app.get("/get-simplefin-accounts", async (req, res) => {
     // Return a message to the user 
     return res.json({ success: true, simpleFinResponse: simpleFinResponse});
     
-  } catch(e) {
-    console.error("/get-simplefin-accounts returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch(err) {
+    next(err);
   }
 });
 
@@ -1123,9 +1164,8 @@ app.post("/sync-simplefin-data", async (req, res) => {
     // Return a message to the user 
     return res.json({ success: true, message: "New SimpleFin data synced to DB. "+accountBalanceUpdateCt+" account balances updated, and "+insertedTransactionsCt+" transactions imported." });
     
-  } catch(e) {
-    console.error("/sync-simplefin-data returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch(err) {
+    next(err);
   }
 });
 
@@ -1147,9 +1187,8 @@ app.get("/load-user", async (req, res) => {
 
     return res.json({ success: true, result: result });
 
-  } catch (e) {
-    console.error("/load-user returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1180,8 +1219,7 @@ app.post("/refresh", async (req, res) => {
     });
     
   } catch (err) {
-    console.error("SYNC USER ERROR:", err);
-    res.status(500).json({ error: "Server error" });
+    next(err);
   }
 });
 
@@ -1235,9 +1273,8 @@ app.post("/insert-transfer-group", async (req, res) => {
       tgid
     });
 
-  } catch (e) {
-    console.error("/insert-transfer-group returned the following error: ", e);
-    res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1259,9 +1296,8 @@ app.get("/get-debit-accounts", async (req, res) => {
 
     return res.json({ success: true, result: result });
 
-  } catch (e) {
-    console.error("/get-debit-accounts returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1290,12 +1326,8 @@ app.get("/get-all-accounts", async (req, res) => {
       allAccounts
     });
 
-  } catch (e) {
-    console.error("/get-all-accounts returned the following error: ", e);
-    return res.status(500).json({
-      success: false,
-      message: "Server error, please try again later"
-    });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1317,9 +1349,8 @@ app.get("/get-transactions", async (req, res) => {
 
     return res.json({ success: true, result: result });
 
-  } catch (e) {
-    console.error("/get-transactions returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1341,9 +1372,8 @@ app.get("/get-transfer-groups", async (req, res) => {
 
     return res.json({ success: true, result: result });
 
-  } catch (e) {
-    console.error("/get-transfer-groups returned the following error: ", e);
-    return res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1355,6 +1385,9 @@ app.post("/update-user-email", async (req, res) => {
     if (!id || !email) {
       return res.status(400).json({ error: "Missing required field" });
     }
+
+    // Connect to Azure DB
+    const pool = await sql.connect(azureConfig);
 
     // Update the user's email
     await safeQuery(async () => {
@@ -1372,9 +1405,8 @@ app.post("/update-user-email", async (req, res) => {
 
     res.json({success: true, message: "User email updated"});
 
-  } catch (e) {
-    console.error("/update-user-email returned the following error: ", e);
-    res.status(500).json({ success: false, message: "Server error, please try again later" });
+  } catch (err) {
+    next(err);
   }
 });
 
@@ -1415,8 +1447,7 @@ app.post("/update-account-types", async (req, res) => {
     return res.json({ success: true, message: "Account types updated successfully." });
 
   } catch (err) {
-    console.error("Server error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
+    next(err);
   }
 });
 
@@ -1447,8 +1478,7 @@ app.get("/users", async (req, res) => {
 
         res.json(result.recordset);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Database error");
+      next(err);
     }
 });
 
@@ -1460,8 +1490,7 @@ app.get("/debitaccounts", async (req, res) => {
 
         res.json(result.recordset);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Database error");
+      next(err);
     }
 });
 
@@ -1473,8 +1502,7 @@ app.get("/creditaccounts", async (req, res) => {
 
         res.json(result.recordset);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Database error");
+      next(err);
     }
 });
 
@@ -1486,8 +1514,7 @@ app.get("/transactions", async (req, res) => {
 
         res.json(result.recordset);
     } catch (err) {
-        console.error(err);
-        res.status(500).send("Database error");
+      next(err);
     }
 });
 
@@ -1513,4 +1540,22 @@ app.get("/db-health", async (req, res) => {
       timestamp: new Date().toISOString()
     });
   }
+});
+
+// Error handling for all endpoints
+app.use((err, req, res, next) => {
+  if (err.code === "DB_SLEEPING") {
+    return res.status(503).json({
+      success: false,
+      reason: "DB_SLEEPING",
+      message: "Database is waking up. Please try again in a moment."
+    });
+  }
+
+  console.error("Unhandled error:", err);
+
+  res.status(500).json({
+    success: false,
+    message: "Server error, please try again later"
+  });
 });
