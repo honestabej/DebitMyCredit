@@ -756,7 +756,7 @@ async function syncTransferGroups(userID, clientTransferGroups, lastSuccessfulSe
 app.get("/", (req, res) => res.send("Server is running"));
 
 // Register a new user
-app.post("/register", async (req, res) => {
+app.post("/register", async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
@@ -846,7 +846,7 @@ app.post("/register", async (req, res) => {
 });
 
 // Login an existing user with email/password
-app.post("/login", async (req, res) => {
+app.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
@@ -889,7 +889,7 @@ app.post("/login", async (req, res) => {
 });
 
 // Add a user's simpleFin username and password to Azure
-app.post("/connect-simplefin", async (req, res) => {
+app.post("/connect-simplefin", async (req, res, next) => {
   try {
     const { userID, simpleFinUsername, simpleFinPassword } = req.body;
     if (!userID || !simpleFinUsername || !simpleFinPassword) return res.status(400).json({ error: "userID, username, and password required" });
@@ -1010,7 +1010,7 @@ app.post("/connect-simplefin", async (req, res) => {
 });
 
 // Remove a user's simplefin credentials
-app.post("/remove-simplefin", async (req, res) => {
+app.post("/remove-simplefin", async (req, res, next) => {
   try {
     const { userID } = req.body;
     if (!userID ) return res.status(400).json({ error: "userID required" });
@@ -1044,7 +1044,7 @@ app.post("/remove-simplefin", async (req, res) => {
 });
 
 // Initiate a call to simpleFin to get all available accounts
-app.get("/get-simplefin-accounts", async (req, res) => {
+app.get("/get-simplefin-accounts", async (req, res, next) => {
     try { 
     const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "No userID provided" });
@@ -1061,7 +1061,7 @@ app.get("/get-simplefin-accounts", async (req, res) => {
 });
 
 // // Insert new accounts into the Azure DB
-// app.post("/insert-accounts", async (req, res) => {
+// app.post("/insert-accounts", async (req, res, next) => {
 //   try { 
 //     const { userID, debitAccounts, creditAccounts } = req.body;
 //     if (!userID) return res.status(400).json({ error: "No userID provided" });
@@ -1131,7 +1131,7 @@ app.get("/get-simplefin-accounts", async (req, res) => {
 
 
 // Initiate a call to simpleFin to populate Azure DB with most recent account balances and transactions (NOTE: Runs automatically every x hours to keep Azure DB up to date)
-app.post("/sync-simplefin-data", async (req, res) => {
+app.post("/sync-simplefin-data", async (req, res, next) => {
   try { 
     const { userID } = req.body;
     if (!userID) return res.status(400).json({ error: "No userID provided" });
@@ -1170,7 +1170,7 @@ app.post("/sync-simplefin-data", async (req, res) => {
 });
 
 // Get a user
-app.get("/load-user", async (req, res) => {
+app.get("/load-user", async (req, res, next) => {
   try {
     const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
@@ -1193,7 +1193,7 @@ app.get("/load-user", async (req, res) => {
 });
 
 // Refreshes all of the user data (NOTE: Runs periodically when user is using app to keep app and Azure DB in sync)
-app.post("/refresh", async (req, res) => {
+app.post("/refresh", async (req, res, next) => {
   try {
     const { user: clientUser, accounts: clientAccounts, transactions: clientTransactions, transferGroups: clientTransferGroups, lastSuccessfulServerSync } = req.body;
     if (!clientUser.userID) return res.status(400).json({ error: "userID required" });
@@ -1224,7 +1224,7 @@ app.post("/refresh", async (req, res) => {
 });
 
 // Create a transferGroup
-app.post("/insert-transfer-group", async (req, res) => {
+app.post("/insert-transfer-group", async (req, res, next) => {
   try {
     const { tgid, userID, name, transactions: transactions } = req.body;
 
@@ -1279,7 +1279,7 @@ app.post("/insert-transfer-group", async (req, res) => {
 });
 
 // Get a user's accounts data
-app.get("/get-debit-accounts", async (req, res) => {
+app.get("/get-debit-accounts", async (req, res, next) => {
   try {
     const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
@@ -1302,7 +1302,7 @@ app.get("/get-debit-accounts", async (req, res) => {
 });
 
 // Get all user accounts (debit, credit, other)
-app.get("/get-all-accounts", async (req, res) => {
+app.get("/get-all-accounts", async (req, res, next) => {
   try {
     const userID = req.query.userID;
     if (!userID) {
@@ -1332,7 +1332,7 @@ app.get("/get-all-accounts", async (req, res) => {
 });
 
 // Get a user's transactions data
-app.get("/get-transactions", async (req, res) => {
+app.get("/get-transactions", async (req, res, next) => {
   try {
     const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
@@ -1355,7 +1355,7 @@ app.get("/get-transactions", async (req, res) => {
 });
 
 // Get a user's transfer group data
-app.get("/get-transfer-groups", async (req, res) => {
+app.get("/get-transfer-groups", async (req, res, next) => {
   try {
     const userID = req.query.userID;
     if (!userID) return res.status(400).json({ error: "userID required" });
@@ -1378,7 +1378,7 @@ app.get("/get-transfer-groups", async (req, res) => {
 });
 
 // Update a user
-app.post("/update-user-email", async (req, res) => {
+app.post("/update-user-email", async (req, res, next) => {
   try {
     const { id, email } = req.body;
 
@@ -1411,7 +1411,7 @@ app.post("/update-user-email", async (req, res) => {
 });
 
 // Update an account type
-app.post("/update-account-types", async (req, res) => {
+app.post("/update-account-types", async (req, res, next) => {
   try {
     const { userID, updates } = req.body;
 
@@ -1452,17 +1452,17 @@ app.post("/update-account-types", async (req, res) => {
 });
 
 // Update an account
-app.post("/update-debit-account-name", async (req, res) => {
+app.post("/update-debit-account-name", async (req, res, next) => {
 
 });
 
 // Update a transaction
-app.post("/update-transactions", async (req, res) => {
+app.post("/update-transactions", async (req, res, next) => {
 
 });
 
 // Update a transfer group
-app.post("/update-transfer-group", async (req, res) => {
+app.post("/update-transfer-group", async (req, res, next) => {
 
 });
 
@@ -1470,7 +1470,7 @@ app.post("/update-transfer-group", async (req, res) => {
 
 
 // GET Table endpoints
-app.get("/users", async (req, res) => {
+app.get("/users", async (req, res, next) => {
     try {
         const pool = await sql.connect(azureConfig);
 
@@ -1482,7 +1482,7 @@ app.get("/users", async (req, res) => {
     }
 });
 
-app.get("/debitaccounts", async (req, res) => {
+app.get("/debitaccounts", async (req, res, next) => {
     try {
         const pool = await sql.connect(azureConfig);
 
@@ -1494,7 +1494,7 @@ app.get("/debitaccounts", async (req, res) => {
     }
 });
 
-app.get("/creditaccounts", async (req, res) => {
+app.get("/creditaccounts", async (req, res, next) => {
     try {
         const pool = await sql.connect(azureConfig);
 
@@ -1506,7 +1506,7 @@ app.get("/creditaccounts", async (req, res) => {
     }
 });
 
-app.get("/transactions", async (req, res) => {
+app.get("/transactions", async (req, res, next) => {
     try {
         const pool = await sql.connect(azureConfig);
 
