@@ -5,6 +5,7 @@ import sql from "mssql";
 import cors from "cors";
 import axios from "axios";
 import bcrypt from "bcryptjs";
+import cron from "node-cron";
 import { v4 as uuidv4 } from "uuid";
 
 const app = express();
@@ -53,6 +54,30 @@ async function hashPassword(plain) {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(plain, salt);
 }
+
+// Sync the Azure DB with new simpleFIN data every 8 hours for all users
+cron.schedule("0 */8 * * *", async () => {
+  console.log(`[Cron] Starting SimpleFin sync at ${new Date().toISOString()}`);
+
+  try {
+    const pool = await sql.connect(azureConfig);
+    const usersResult = await safeQuery(() => pool.request().query("SELECT id FROM Users"));
+    const users = usersResult.recordset;
+
+    for (const user of users) {
+      try {
+        const result = await syncSimpleFinDataForUser(user.id);
+        console.log(`[Cron] Synced user ${user.id}: ${result.accountBalanceUpdateCt} balances, ${result.insertedTransactionsCt} transactions`);
+      } catch (err) {
+        console.error(`[Cron] Failed to sync user ${user.id}:`, err);
+      }
+    }
+
+    console.log(`[Cron] Finished SimpleFin sync at ${new Date().toISOString()}`);
+  } catch (err) {
+    console.error("[Cron] Failed to fetch users or run sync:", err);
+  }
+});
 
 // Detect transient errors indicating Azure DB is asleep or overloaded
 function isAzureTransientError(err) {
@@ -365,6 +390,42 @@ async function importNewTransactions(userID, accounts) {
   }
 
   return newTransactions.length;
+}
+
+// Holds the logic of the process to update the Azure DB with new simpleFin data
+export async function syncSimpleFinDataForUser(userID) {
+  if (!userID) throw new Error("userID is required");
+
+  // Get and decrypt the user's simpleFin credentials, call to simpleFin API
+  const simpleFinResponse = await fetchSimpleFinData(userID);
+
+  if (!simpleFinResponse.length) {
+    throw new Error("Error retrieving accounts from SimpleFin");
+  }
+
+  // Update balances of existing accounts in the Azure DB
+  const accountBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
+
+  // Add any new transactions to the Azure DB
+  const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
+
+  // Update lastSimpleFinSync for the user
+  const pool = await sql.connect(azureConfig);
+  await safeQuery(async () => {
+    return pool.request()
+      .input("userID", sql.VarChar(50), userID)
+      .input("lastSync", sql.DateTimeOffset, new Date())
+      .query(`
+        UPDATE Users
+        SET lastSimpleFinSync = @lastSync, updatedAt = SYSUTCDATETIME()
+        WHERE id = @userID
+      `);
+  });
+
+  return {
+    accountBalanceUpdateCt,
+    insertedTransactionsCt
+  };
 }
 
 async function syncUser(clientUser) {
@@ -1132,39 +1193,17 @@ app.get("/get-simplefin-accounts", async (req, res, next) => {
 
 // Initiate a call to simpleFin to populate Azure DB with most recent account balances and transactions (NOTE: Runs automatically every x hours to keep Azure DB up to date)
 app.post("/sync-simplefin-data", async (req, res, next) => {
-  try { 
+  try {
     const { userID } = req.body;
     if (!userID) return res.status(400).json({ error: "No userID provided" });
 
-    // Get and decrypt the user's simpleFin credentials, call to simpleFin API, and return the JSON response
-    const simpleFinResponse = await fetchSimpleFinData(userID);
+    const result = await syncSimpleFinDataForUser(userID);
 
-    // Ensure that the simpleFinResponse is not empty
-    if (!simpleFinResponse.length) return res.status(400).json({ success: false, error: "Error retrieving accounts from simpleFin" });
-
-    // Update balances of existing accounts in the Azure DB
-    const accountBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
-
-    // Add any transactions to the Azure DB
-    const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
-
-    // Set the lastSimpleFinSync time for the user
-    const pool = await sql.connect(azureConfig);
-    await safeQuery(async () => {
-      return pool.request()
-        .input("userID", sql.VarChar(50), userID)
-        .input("lastSync", sql.DateTimeOffset, new Date())
-        .query(`
-          UPDATE Users
-          SET lastSimpleFinSync = @lastSync, updatedAt = SYSUTCDATETIME()
-          WHERE id = @userID
-        `);
+    res.json({
+      success: true,
+      message: `New SimpleFin data synced to DB. ${result.accountBalanceUpdateCt} account balances updated, and ${result.insertedTransactionsCt} transactions imported.`
     });
-
-    // Return a message to the user 
-    return res.json({ success: true, message: "New SimpleFin data synced to DB. "+accountBalanceUpdateCt+" account balances updated, and "+insertedTransactionsCt+" transactions imported." });
-    
-  } catch(err) {
+  } catch (err) {
     next(err);
   }
 });
