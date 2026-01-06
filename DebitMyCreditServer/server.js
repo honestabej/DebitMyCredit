@@ -60,7 +60,7 @@ cron.schedule("0 */8 * * *", async () => {
   console.log(`[Cron] Starting SimpleFin sync at ${new Date().toISOString()}`);
 
   try {
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
     const usersResult = await safeQuery(() => pool.request().query("SELECT id FROM Users"));
     const users = usersResult.recordset;
 
@@ -108,7 +108,7 @@ async function wakeDatabase(maxWaitMs = 90_000, pollIntervalMs = 5_000) {
 
   while (Date.now() - start < maxWaitMs) {
     try {
-      const pool = await sql.connect(azureConfig);
+      const pool = await safeQuery(() => sql.connect(azureConfig));
       await pool.request().query("SELECT 1");
       console.log("Azure DB is awake.");
       return;
@@ -172,7 +172,7 @@ function getUnixTime30DaysAgo() {
 // This function is in charge of making the call to simpleFin and returning a JSON object containing all of the accounts connected to simpleFin
 async function fetchSimpleFinAccounts(userID) {
   // Connect Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Get the user's simpleFin credentials
   const userResult = await safeQuery(async () => {
@@ -214,7 +214,7 @@ async function fetchSimpleFinAccounts(userID) {
 // This function is in charge of making the call to simpleFin and returning a JSON object containing all of the latest data and the last 30 days of transactions
 async function fetchSimpleFinData(userID) {
   // Connect Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Get the user's simpleFin credentials
   const userResult = await safeQuery(async () => {
@@ -261,7 +261,7 @@ async function updateDebitAccountBalances(userID, accounts) {
   if (!accounts || !accounts.length) return 0;
   
   // Connect to the Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Get debit accounts from the Azure DB
   const debitAccounts = await safeQuery(async () => {
@@ -321,7 +321,7 @@ async function importNewTransactions(userID, accounts) {
   if (!accounts || !accounts.length) return 0;
   
   // Connect to the Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Get credit accounts from the Azure DB
   const creditAccounts = await safeQuery(async () => {
@@ -410,7 +410,7 @@ export async function syncSimpleFinDataForUser(userID) {
   const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
 
   // Update lastSimpleFinSync for the user
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
   await safeQuery(async () => {
     return pool.request()
       .input("userID", sql.VarChar(50), userID)
@@ -430,7 +430,7 @@ export async function syncSimpleFinDataForUser(userID) {
 
 async function syncUser(clientUser) {
   // Connect to the Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Fetch the user from the DB
   const dbResult = await safeQuery(async () => {
@@ -481,7 +481,7 @@ async function syncUser(clientUser) {
 
 async function syncDebitAccounts(userID, clientAccounts) {
   // Connect to the Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Fetch all accounts from server DB
   const dbResult = await safeQuery(async () => {
@@ -546,7 +546,7 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
   if (!userID) throw new Error("userID required");
 
   // Connect to Azure DB
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   // Variables to keep track of inserted and updated transactions
   let updatedCount = 0;
@@ -691,7 +691,7 @@ async function syncTransactions(userID, clientTransactions, lastSuccessfulServer
 async function syncTransferGroups(userID, clientTransferGroups, lastSuccessfulServerSync) {
   if (!userID) throw new Error("userID required");
 
-  const pool = await sql.connect(azureConfig);
+  const pool = await safeQuery(() => sql.connect(azureConfig));
 
   let insertedCount = 0;
   let updatedCount = 0;
@@ -825,7 +825,7 @@ app.post("/register", async (req, res, next) => {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Check if email already exists
     const existing = await safeQuery(async () => {
@@ -914,7 +914,7 @@ app.post("/login", async (req, res, next) => {
     if (!email || !password) return res.status(400).json({ success: false, error: "Missing fields" });
     
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Select user with query
     const result = await safeQuery(async () => {
@@ -960,7 +960,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
     const passwordEnc = encrypt(simpleFinPassword);
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Insert the encrypted credentials with thefollowing query
     await safeQuery(async () => {
@@ -1077,7 +1077,7 @@ app.post("/remove-simplefin", async (req, res, next) => {
     if (!userID ) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Insert the encrypted credentials with thefollowing query
     await safeQuery(async () => {
@@ -1128,7 +1128,7 @@ app.get("/get-simplefin-accounts", async (req, res, next) => {
 //     if (!userID) return res.status(400).json({ error: "No userID provided" });
 
 //     // Connect to Azure DB
-//     const pool = await sql.connect(azureConfig);
+//     const pool = await safeQuery(() => sql.connect(azureConfig));
 
 //     let insertedDebitCount = 0;
 //     let insertedCreditCount = 0;
@@ -1215,7 +1215,7 @@ app.get("/load-user", async (req, res, next) => {
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
     
     // Get user with query
     const result = await safeQuery(async () => {
@@ -1271,7 +1271,7 @@ app.post("/insert-transfer-group", async (req, res, next) => {
       return res.status(400).json({ error: "Missing required field" });
     }
 
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Insert new transfer group into the Azure DB
     await safeQuery(async () => {
@@ -1324,7 +1324,7 @@ app.get("/get-debit-accounts", async (req, res, next) => {
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
     
     // Get user with query
     const result = await safeQuery(async () => {
@@ -1349,7 +1349,7 @@ app.get("/get-all-accounts", async (req, res, next) => {
     }
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Query all accounts for this user
     const result = await safeQuery(async () => {
@@ -1377,7 +1377,7 @@ app.get("/get-transactions", async (req, res, next) => {
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
     
     // Get user with query
     const result = await safeQuery(async () => {
@@ -1400,7 +1400,7 @@ app.get("/get-transfer-groups", async (req, res, next) => {
     if (!userID) return res.status(400).json({ error: "userID required" });
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
     
     // Get user with query
     const result = await safeQuery(async () => {
@@ -1426,7 +1426,7 @@ app.post("/update-user-email", async (req, res, next) => {
     }
 
     // Connect to Azure DB
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     // Update the user's email
     await safeQuery(async () => {
@@ -1462,7 +1462,7 @@ app.post("/update-account-types", async (req, res, next) => {
       return res.status(400).json({ success: false, message: "No updates provided" });
     }
 
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     for (const update of updates) {
       const { accountID, accountType } = update;
@@ -1511,7 +1511,7 @@ app.post("/update-transfer-group", async (req, res, next) => {
 // GET Table endpoints
 app.get("/users", async (req, res, next) => {
     try {
-        const pool = await sql.connect(azureConfig);
+        const pool = await safeQuery(() => sql.connect(azureConfig));
 
         const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Users") });
 
@@ -1523,7 +1523,7 @@ app.get("/users", async (req, res, next) => {
 
 app.get("/debitaccounts", async (req, res, next) => {
     try {
-        const pool = await sql.connect(azureConfig);
+        const pool = await safeQuery(() => sql.connect(azureConfig));
 
         const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.DebitAccounts") });
 
@@ -1535,7 +1535,7 @@ app.get("/debitaccounts", async (req, res, next) => {
 
 app.get("/creditaccounts", async (req, res, next) => {
     try {
-        const pool = await sql.connect(azureConfig);
+        const pool = await safeQuery(() => sql.connect(azureConfig));
 
         const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.CreditAccounts") });
 
@@ -1547,7 +1547,7 @@ app.get("/creditaccounts", async (req, res, next) => {
 
 app.get("/transactions", async (req, res, next) => {
     try {
-        const pool = await sql.connect(azureConfig);
+        const pool = await safeQuery(() => sql.connect(azureConfig));
 
         const result = await safeQuery(async () => { return pool.request().query("SELECT * FROM dbo.Transactions ORDER BY transactionDate DESC") });
 
@@ -1559,7 +1559,7 @@ app.get("/transactions", async (req, res, next) => {
 
 app.get("/db-health", async (req, res) => {
   try {
-    const pool = await sql.connect(azureConfig);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
 
     const result = await safeQuery(async () => { return pool.request().query(`SELECT 1 AS dbAlive`) });
 
