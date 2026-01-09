@@ -392,7 +392,7 @@ export async function syncSimpleFinDataForUser(userID) {
       console.warn(`[Sync] No SimpleFin accounts returned for user: ${userID}`);
       throw new Error("Error retrieving accounts from SimpleFin");
     }
-    console.log(`[Sync] Retrieved ${simpleFinResponse.length} accounts for user: ${userID}`);
+    console.log(`[Sync] Retrieved ${simpleFinResponse} accounts for user: ${userID}`);
 
     // Update balances of existing accounts in the Azure DB
     console.log(`[Sync] Updating account balances for user: ${userID}`);
@@ -1227,6 +1227,8 @@ app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => 
     );
 
     const users = usersResult.recordset;
+
+    console.log("Users to update: ", users);
 
     let totalAccountsUpdated = 0;
     let totalTransactionsInserted = 0;
