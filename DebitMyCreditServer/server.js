@@ -55,29 +55,15 @@ async function hashPassword(plain) {
   return bcrypt.hash(plain, salt);
 }
 
-// Sync the Azure DB with new simpleFIN data every 8 hours for all users
-cron.schedule("0 */8 * * *", async () => {
-  console.log(`[Cron] Starting SimpleFin sync at ${new Date().toISOString()}`);
+function verifyCron(req, res, next) {
+  const secret = req.header("x-cron-secret");
 
-  try {
-    const pool = await safeQuery(() => sql.connect(azureConfig));
-    const usersResult = await safeQuery(() => pool.request().query("SELECT id FROM Users"));
-    const users = usersResult.recordset;
-
-    for (const user of users) {
-      try {
-        const result = await syncSimpleFinDataForUser(user.id);
-        console.log(`[Cron] Synced user ${user.id}: ${result.accountBalanceUpdateCt} balances, ${result.insertedTransactionsCt} transactions`);
-      } catch (err) {
-        console.error(`[Cron] Failed to sync user ${user.id}:`, err);
-      }
-    }
-
-    console.log(`[Cron] Finished SimpleFin sync at ${new Date().toISOString()}`);
-  } catch (err) {
-    console.error("[Cron] Failed to fetch users or run sync:", err);
+  if (!secret || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-});
+
+  next();
+}
 
 // Detect transient errors indicating Azure DB is asleep or overloaded
 function isAzureTransientError(err) {
@@ -1203,6 +1189,48 @@ app.post("/sync-simplefin-data", async (req, res, next) => {
       success: true,
       message: `New SimpleFin data synced to DB. ${result.accountBalanceUpdateCt} account balances updated, and ${result.insertedTransactionsCt} transactions imported.`
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Internal call to sync all simpleFin user data, called every 8 hours by an external hook, never the client
+app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
+  try {
+    const pool = await sql.connect(azureConfig);
+
+    // Only users with SimpleFin credentials
+    const usersResult = await safeQuery(() => 
+      pool.request().query(`
+        SELECT id
+        FROM Users
+        WHERE simpleFinUsernameData IS NOT NULL
+          AND simpleFinPasswordData IS NOT NULL
+      `)
+    );
+
+    const users = usersResult.recordset;
+
+    let totalAccountsUpdated = 0;
+    let totalTransactionsInserted = 0;
+
+    for (const user of users) {
+      try {
+        const result = await syncSimpleFinDataForUser(user.id);
+        totalAccountsUpdated += result.accountBalanceUpdateCt;
+        totalTransactionsInserted += result.insertedTransactionsCt;
+      } catch (err) {
+        console.error(`[Cron] Failed user ${user.id}:`, err);
+      }
+    }
+
+    res.json({
+      success: true,
+      usersProcessed: users.length,
+      totalAccountsUpdated,
+      totalTransactionsInserted
+    });
+
   } catch (err) {
     next(err);
   }
