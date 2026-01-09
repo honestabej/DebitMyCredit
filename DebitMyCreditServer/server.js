@@ -381,37 +381,54 @@ async function importNewTransactions(userID, accounts) {
 // Holds the logic of the process to update the Azure DB with new simpleFin data
 export async function syncSimpleFinDataForUser(userID) {
   if (!userID) throw new Error("userID is required");
+  console.log(`[Sync] Starting SimpleFin sync for user: ${userID} at ${new Date().toISOString()}`);
 
-  // Get and decrypt the user's simpleFin credentials, call to simpleFin API
-  const simpleFinResponse = await fetchSimpleFinData(userID);
+  try {
+    // Get and decrypt the user's simpleFin credentials, call to SimpleFin API
+    console.log(`[Sync] Fetching SimpleFin data for user: ${userID}`);
+    const simpleFinResponse = await fetchSimpleFinData(userID);
 
-  if (!simpleFinResponse.length) {
-    throw new Error("Error retrieving accounts from SimpleFin");
+    if (!simpleFinResponse || !simpleFinResponse.length) {
+      console.warn(`[Sync] No SimpleFin accounts returned for user: ${userID}`);
+      throw new Error("Error retrieving accounts from SimpleFin");
+    }
+    console.log(`[Sync] Retrieved ${simpleFinResponse.length} accounts for user: ${userID}`);
+
+    // Update balances of existing accounts in the Azure DB
+    console.log(`[Sync] Updating account balances for user: ${userID}`);
+    const accountBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
+    console.log(`[Sync] Updated ${accountBalanceUpdateCt} account balances for user: ${userID}`);
+
+    // Add any new transactions to the Azure DB
+    console.log(`[Sync] Importing new transactions for user: ${userID}`);
+    const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
+    console.log(`[Sync] Inserted ${insertedTransactionsCt} new transactions for user: ${userID}`);
+
+    // Update lastSimpleFinSync for the user
+    console.log(`[Sync] Updating lastSimpleFinSync for user: ${userID}`);
+    const pool = await safeQuery(() => sql.connect(azureConfig));
+    await safeQuery(async () => {
+      return pool.request()
+        .input("userID", sql.VarChar(50), userID)
+        .input("lastSync", sql.DateTimeOffset, new Date())
+        .query(`
+          UPDATE Users
+          SET lastSimpleFinSync = @lastSync, updatedAt = SYSUTCDATETIME()
+          WHERE id = @userID
+        `);
+    });
+    console.log(`[Sync] lastSimpleFinSync updated for user: ${userID}`);
+
+    console.log(`[Sync] Finished SimpleFin sync for user: ${userID}`);
+    return {
+      accountBalanceUpdateCt,
+      insertedTransactionsCt
+    };
+
+  } catch (err) {
+    console.error(`[Sync] Error syncing user ${userID}:`, err);
+    throw err;
   }
-
-  // Update balances of existing accounts in the Azure DB
-  const accountBalanceUpdateCt = await updateDebitAccountBalances(userID, simpleFinResponse);
-
-  // Add any new transactions to the Azure DB
-  const insertedTransactionsCt = await importNewTransactions(userID, simpleFinResponse);
-
-  // Update lastSimpleFinSync for the user
-  const pool = await safeQuery(() => sql.connect(azureConfig));
-  await safeQuery(async () => {
-    return pool.request()
-      .input("userID", sql.VarChar(50), userID)
-      .input("lastSync", sql.DateTimeOffset, new Date())
-      .query(`
-        UPDATE Users
-        SET lastSimpleFinSync = @lastSync, updatedAt = SYSUTCDATETIME()
-        WHERE id = @userID
-      `);
-  });
-
-  return {
-    accountBalanceUpdateCt,
-    insertedTransactionsCt
-  };
 }
 
 async function syncUser(clientUser) {
