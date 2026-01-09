@@ -3,15 +3,56 @@ name: SimpleFin Sync Cron
 on:
   schedule:
     - cron: "0 */8 * * *"   # every 8 hours (UTC)
-  workflow_dispatch:       # allows manual trigger
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Call SimpleFin sync endpoint
+      - name: Retry SimpleFin sync endpoint if server or DB sleeping
         run: |
-          curl -X POST https://debitmycredit.azurewebsites.net/internal/sync-simplefin-data \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            -H "Content-Type: application/json"
+          MAX_WAIT=120  # 2 minutes max
+          INTERVAL=5    # retry interval in seconds
+          START=$(date +%s)
+
+          while true; do
+            # Call the endpoint, capture body and HTTP code
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://debitmycredit.azurewebsites.net/internal/sync-simplefin-data \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+              -H "Content-Type: application/json" \
+              -d '{"userID": "ALL"}')
+
+            HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+            HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
+
+            # Success
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "SimpleFin sync succeeded!"
+              echo "$HTTP_BODY"
+              break
+            fi
+
+            # Retry if DB_SLEEPING
+            if [[ "$HTTP_CODE" == "503" && "$HTTP_BODY" == *'"reason":"DB_SLEEPING"'* ]]; then
+              echo "Database sleeping, retrying..."
+            # Retry if App Service is sleeping (server returned 500 or connection error)
+            elif [[ "$HTTP_CODE" == "500" || "$HTTP_CODE" == "000" ]]; then
+              echo "Server sleeping or not ready, retrying..."
+            else
+              echo "Sync failed with HTTP $HTTP_CODE"
+              echo "$HTTP_BODY"
+              exit 1
+            fi
+
+            # Check max wait
+            NOW=$(date +%s)
+            ELAPSED=$(( NOW - START ))
+            if [ $ELAPSED -ge $MAX_WAIT ]; then
+              echo "Max wait reached ($ELAPSED seconds). Giving up."
+              echo "$HTTP_BODY"
+              exit 1
+            fi
+
+            sleep $INTERVAL
+          done
