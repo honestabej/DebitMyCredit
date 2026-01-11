@@ -265,6 +265,7 @@ async function updateDebitAccountBalances(userID, accounts) {
 
   // Loop through all of the simpleFin accounts
   for (const account of accounts) {
+    console.log(`[Sync] Updating info for ${account}`);
     // Skip if the Accounts table does not have this simpleFin account
     if (!debitAccountsMap.has(account.id)) continue;
 
@@ -304,6 +305,7 @@ async function updateDebitAccountBalances(userID, accounts) {
 
 // Iterates through the JSON SimpleFin object and adds any new transactions from credit card accounts to the Azure DB
 async function importNewTransactions(userID, accounts) {
+  console.log(`[Sync] Importing new transactions... `);
   if (!accounts || !accounts.length) return 0;
   
   // Connect to the Azure DB
@@ -330,6 +332,8 @@ async function importNewTransactions(userID, accounts) {
   // Collect all new transactions to insert
   const newTransactions = [];
 
+  console.log(`[Sync] First check`);
+
   for (const account of accounts) {
     if (!creditAccountIds.has(account.id)) continue;
     if (!account.transactions || !account.transactions.length) continue;
@@ -349,6 +353,8 @@ async function importNewTransactions(userID, accounts) {
     }
   }
 
+  console.log(`[Sync] Second check`);
+
   // Insert all new transactions in a single query using a table-valued parameter
   if (newTransactions.length > 0) {
     const table = new sql.Table();
@@ -364,6 +370,8 @@ async function importNewTransactions(userID, accounts) {
       table.rows.add(tx.id, tx.userID, tx.creditAccountID, tx.name, tx.amount, tx.transactionDate, tx.notes);
     });
 
+    console.log(`[Sync] Third check: ${table}`);
+
     await safeQuery(async () => {
       return pool.request()
         .input("transactions", table)
@@ -373,6 +381,8 @@ async function importNewTransactions(userID, accounts) {
           FROM @transactions
         `);
     });
+
+    console.log(`[Sync] Fourth check`);
   }
 
   return newTransactions.length;
@@ -392,7 +402,7 @@ export async function syncSimpleFinDataForUser(userID) {
       console.warn(`[Sync] No SimpleFin accounts returned for user: ${userID}`);
       throw new Error("Error retrieving accounts from SimpleFin");
     }
-    console.log(`[Sync] Retrieved ${simpleFinResponse} accounts for user: ${userID}`);
+    // console.log(`[Sync] Retrieved ${simpleFinResponse[0]} accounts for user: ${userID}`);
 
     // Update balances of existing accounts in the Azure DB
     console.log(`[Sync] Updating account balances for user: ${userID}`);
