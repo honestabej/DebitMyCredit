@@ -65,6 +65,15 @@ function verifyCron(req, res, next) {
   next();
 }
 
+function toSqlDateTimeOffset(value) {
+  const d = new Date(value);
+  if (isNaN(d)) return null;
+
+  // Truncate to milliseconds (Tedious-safe)
+  d.setMilliseconds(Math.floor(d.getMilliseconds()));
+  return d;
+}
+
 // Detect transient errors indicating Azure DB is asleep or overloaded
 function isAzureTransientError(err) {
   const transientErrorNumbers = [40613, 40197, 40501];
@@ -367,10 +376,17 @@ async function importNewTransactions(userID, accounts) {
     table.columns.add("notes", sql.NVarChar(sql.MAX), { nullable: false });
 
     newTransactions.forEach(tx => {
-      table.rows.add(tx.id, tx.userID, tx.creditAccountID, tx.name, tx.amount, tx.transactionDate, tx.notes);
+      console.log(`[Sync] Third check: ${Number(tx.amount.toFixed(2))}, ${toSqlDateTimeOffset(tx.transactionDate)}`);
+      table.rows.add(
+        tx.id,
+        tx.userID,
+        tx.creditAccountID,
+        tx.name,
+        Number(tx.amount.toFixed(2)),      
+        toSqlDateTimeOffset(tx.transactionDate),
+        tx.notes ?? ""
+      );
     });
-
-    console.log(`[Sync] Third check: ${table}`);
 
     await safeQuery(async () => {
       return pool.request()
