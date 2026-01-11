@@ -391,11 +391,7 @@ async function importNewTransactions(userID, accounts) {
     await safeQuery(async () => {
       return pool.request()
         .input("transactions", table)
-        .query(`
-          INSERT INTO Transactions (id, userID, creditAccountID, name, amount, transactionDate, notes)
-          SELECT id, userID, creditAccountID, name, amount, transactionDate, notes
-          FROM @transactions
-        `);
+        .execute("dbo.InsertTransactions"); 
     });
 
     console.log(`[Sync] Fourth check`);
