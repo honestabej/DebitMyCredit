@@ -372,7 +372,7 @@ async function importNewTransactions(userID, accounts) {
     table.columns.add("creditAccountID", sql.VarChar(50), { nullable: false });
     table.columns.add("name", sql.NVarChar(255), { nullable: false });
     table.columns.add("amount", sql.Decimal(18, 2), { nullable: false });
-    table.columns.add("transactionDate", sql.DateTimeOffset, { nullable: false });
+    table.columns.add("transactionDate", sql.DateTimeOffset(0), { nullable: false });
     table.columns.add("notes", sql.NVarChar(sql.MAX), { nullable: false });
 
     newTransactions.forEach(tx => {
