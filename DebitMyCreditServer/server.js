@@ -142,6 +142,7 @@ app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => 
   }
 });
 
+// Register a new user
 app.post("/register", async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -264,3 +265,135 @@ app.post("/login", async (req, res, next) => {
   }
 });
 
+// Connect the User's SimpleFin account
+app.post("/connect-simplefin", async (req, res, next) => {
+  try {
+    // Get id and token from user
+    const { userID, setupToken } = req.body;
+    if (!userID || !setupToken) return res.status(400).json({ error: "userID and setup token required" });
+
+    // Decode setup token into claim url
+    let claimUrl;
+    try {
+      claimUrl = Buffer.from(setupToken, "base64").toString("utf-8");
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid setup token format"
+      });
+    }
+
+    // Get access url
+    let accessUrl;
+    try {
+      const claimResponse = await axios.post(claimUrl);
+      accessUrl = claimResponse.data;
+
+      if (!accessUrl || typeof accessUrl !== "string") {
+        throw new Error("Invalid claim response");
+      }
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: "Failed to claim SimpleFIN token (may be expired or already used)"
+      });
+    }
+
+    // Fetch user's connected accounts from SimpleFIN
+    let accounts;
+    try {
+      const accountResponse = await axios.get(`${accessUrl}/accounts`);
+      accounts = accountResponse.data.accounts;
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch accounts from SimpleFIN"
+      });
+    }
+
+    // Encrypt the access url before storing it in the database
+    const accessEnc = encrypt(accessUrl);
+
+    // Connect to Azure database
+    const pool = await sql.connect(azureConfig);
+
+    // Begin transaction
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      // Store access URL in Users table
+      await new sql.Request(transaction)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("data", sql.VarChar(sql.MAX), accessEnc.data)
+        .input("iv", sql.VarChar(32), accessEnc.iv)
+        .input("tag", sql.VarChar(32), accessEnc.tag)
+        .query(`
+          UPDATE Users
+          SET simpleFinAccessURLData = @data,
+              simpleFinAccessURLIV = @iv,
+              simpleFinAccessURLTag = @tag,
+              updatedAt = SYSUTCDATETIME()
+          WHERE id = @userID
+        `);
+
+      // Upsert accounts
+      for (const account of accounts) {
+        // Format the balance-date correctly
+        const balanceDate = account["balance-date"]
+          ? new Date(account["balance-date"] * 1000)
+          : null;
+
+        await new sql.Request(transaction)
+          .input("id", sql.VarChar(100), account.id)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("name", sql.NVarChar(255), account.name)
+          .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+          .input("balanceDate", sql.DateTimeOffset, balanceDate)
+          .query(`
+            -- Update the account if it already exists
+            UPDATE Accounts
+            SET name = @name,
+                accountBalance = @accountBalance,
+                balanceDate = @balanceDate,
+                updatedAt = SYSUTCDATETIME()
+            WHERE id = @id AND userID = @userID;
+
+            -- If the account did no exist, insert new account with type 'N/A'
+            IF @@ROWCOUNT = 0
+            BEGIN
+              INSERT INTO Accounts (
+                id, userID, name, accountBalance, balanceDate,
+                accountType, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @userID, @name, @accountBalance, @balanceDate,
+                'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
+              )
+            END
+          `);
+      }
+
+      await transaction.commit();
+
+      // After all updates, fetch all accounts for this user
+      const userAccounts = await pool.request()
+          .input("userID", sql.UniqueIdentifier, userID)
+          .query(`SELECT id, name, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+
+      return res.json({
+        success: true,
+        message: "SimpleFIN connected successfully",
+        accounts: userAccounts.recordset
+      });
+
+    } catch (dbErr) {
+      await transaction.rollback();
+      throw dbErr;
+    }
+
+
+  } catch (err) {
+    next(err);
+  } 
+});
