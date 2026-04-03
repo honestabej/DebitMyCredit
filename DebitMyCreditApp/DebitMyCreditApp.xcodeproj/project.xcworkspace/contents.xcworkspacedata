@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "self:">
+   </FileRef>
+   <FileRef
+      location = "group:YourApp.swift">
+   </FileRef>
+   <FileRef
+      location = "group:AuthManager.swift">
+   </FileRef>
+   <FileRef
+      location = "group:MainTabView.swift">
+   </FileRef>
+   <FileRef
+      location = "group:LoginView.swift">
+   </FileRef>
+</Workspace>

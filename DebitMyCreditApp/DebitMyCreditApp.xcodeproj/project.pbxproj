@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		2697035E2F7C761F005147E3 /* DebitMyCredit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DebitMyCredit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2697035E2F7C761F005147E3 /* DebitMyCreditApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DebitMyCreditApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		269703602F7C761F005147E3 /* DebitMyCredit */ = {
+		269703602F7C761F005147E3 /* DebitMyCreditApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = DebitMyCredit;
+			path = DebitMyCreditApp;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		269703552F7C761F005147E3 = {
 			isa = PBXGroup;
 			children = (
-				269703602F7C761F005147E3 /* DebitMyCredit */,
+				269703602F7C761F005147E3 /* DebitMyCreditApp */,
 				2697035F2F7C761F005147E3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		2697035F2F7C761F005147E3 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				2697035E2F7C761F005147E3 /* DebitMyCredit.app */,
+				2697035E2F7C761F005147E3 /* DebitMyCreditApp.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		2697035D2F7C761F005147E3 /* DebitMyCredit */ = {
+		2697035D2F7C761F005147E3 /* DebitMyCreditApp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 2697036E2F7C7620005147E3 /* Build configuration list for PBXNativeTarget "DebitMyCredit" */;
+			buildConfigurationList = 2697036E2F7C7620005147E3 /* Build configuration list for PBXNativeTarget "DebitMyCreditApp" */;
 			buildPhases = (
 				2697035A2F7C761F005147E3 /* Sources */,
 				2697035B2F7C761F005147E3 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				269703602F7C761F005147E3 /* DebitMyCredit */,
+				269703602F7C761F005147E3 /* DebitMyCreditApp */,
 			);
-			name = DebitMyCredit;
+			name = DebitMyCreditApp;
 			packageProductDependencies = (
 			);
 			productName = DebitMyCredit;
-			productReference = 2697035E2F7C761F005147E3 /* DebitMyCredit.app */;
+			productReference = 2697035E2F7C761F005147E3 /* DebitMyCreditApp.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 269703592F7C761F005147E3 /* Build configuration list for PBXProject "DebitMyCredit" */;
+			buildConfigurationList = 269703592F7C761F005147E3 /* Build configuration list for PBXProject "DebitMyCreditApp" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				2697035D2F7C761F005147E3 /* DebitMyCredit */,
+				2697035D2F7C761F005147E3 /* DebitMyCreditApp */,
 			);
 		};
 /* End PBXProject section */
@@ -332,7 +332,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		269703592F7C761F005147E3 /* Build configuration list for PBXProject "DebitMyCredit" */ = {
+		269703592F7C761F005147E3 /* Build configuration list for PBXProject "DebitMyCreditApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				2697036C2F7C7620005147E3 /* Debug */,
@@ -341,7 +341,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		2697036E2F7C7620005147E3 /* Build configuration list for PBXNativeTarget "DebitMyCredit" */ = {
+		2697036E2F7C7620005147E3 /* Build configuration list for PBXNativeTarget "DebitMyCreditApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				2697036F2F7C7620005147E3 /* Debug */,

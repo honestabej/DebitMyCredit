@@ -3,32 +3,44 @@ import SwiftUI
 struct MainTabView: View {
     var body: some View {
         TabView {
-            HomeView()
-                .tabItem { Label("Home", systemImage: "house.fill") }
+            AccountsView()
+                .tabItem { Label("Accounts", systemImage: "creditcard") }
 
-            ProfileView()
-                .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+            TransactionsView()
+                .tabItem { Label("Transactions", systemImage: "list.bullet.rectangle") }
 
+            TransfersView()
+                .tabItem { Label("Transfers", systemImage: "arrow.left.arrow.right") }
+            
             SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }
 }
 
-struct HomeView: View {
+struct AccountsView: View {
     var body: some View {
         NavigationStack {
-            Text("Home")
-                .navigationTitle("Home")
+            Text("Checking Accounts")
+                .navigationTitle("Checking Accounts")
         }
     }
 }
 
-struct ProfileView: View {
+struct TransactionsView: View {
     var body: some View {
         NavigationStack {
-            Text("Profile")
-                .navigationTitle("Profile")
+            Text("Credit Transactions")
+                .navigationTitle("Credit Transactions")
+        }
+    }
+}
+
+struct TransfersView: View {
+    var body: some View {
+        NavigationStack {
+            Text("Transfer Groups")
+                .navigationTitle("Transfer Groups")
         }
     }
 }

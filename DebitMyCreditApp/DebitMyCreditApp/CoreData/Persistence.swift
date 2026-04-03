@@ -18,7 +18,6 @@ struct PersistenceController {
         let user = User(context: context)
         user.id = UUID()
         user.email = "preview@test.com"
-        user.fetchFrequency = 0
         user.createdAt = Date()
         user.updatedAt = Date()
 

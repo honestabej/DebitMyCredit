@@ -1,21 +1,19 @@
-//
-//  DebitMyCreditApp.swift
-//  DebitMyCredit
-//
-//  Created by Abe Johnson on 3/31/26.
-//
-
+// RootView.swift
 import SwiftUI
-import CoreData
 
-@main
-struct Root: App {
-    let persistenceController = PersistenceController.shared
+struct RootView: View {
+    @EnvironmentObject var authManager: AuthManager
+    @State private var showRegister = false
 
-    var body: some Scene {
-        WindowGroup {
+    var body: some View {
+        if authManager.isLoggedIn {
             MainTabView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
+        } else {
+            if showRegister {
+                RegisterView()
+            } else {
+                LoginView()
+            }
         }
     }
 }

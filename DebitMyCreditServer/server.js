@@ -6,6 +6,7 @@ import cors from "cors";
 import axios from "axios";
 import bcrypt from "bcryptjs";
 import cron from "node-cron";
+import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 
 const app = express();
@@ -25,10 +26,12 @@ const azureConfig = {
 const ALGO = "aes-256-gcm";
 const KEY = Buffer.from(process.env.ENCRYPTION_KEY, "hex"); // 32-byte hex
 
+// JWT Setup
+const JWT_SECRET = process.env.JWT_SECRET
+
 // Server steup for testing
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
-// wakeDatabase();
 
 /*****************************************
  * HELPER FUNCTIONS
@@ -81,59 +84,180 @@ function getUnixTime30DaysAgo() {
   return Math.floor(thirtyDaysAgo.getTime() / 1000);
 }
 
-// Detect transient errors indicating Azure DB is asleep or overloaded
-function isAzureTransientError(err) {
-  const transientErrorNumbers = [40613, 40197, 40501];
-
-  return (
-    transientErrorNumbers.includes(err?.number) ||
-    err?.code === "ETIMEOUT" ||
-    err?.code === "ECONNCLOSED" ||
-    err?.message?.toLowerCase().includes("timeout") ||
-    err?.message?.toLowerCase().includes("unavailable")
-  );
-}
-
 
 
 
 /*****************************************
  * API Endpoints
  *****************************************/
+// Internal call from GitHub action to keep DB up to date
+app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
+  res.json({
+    success: true,
+    message: "Temporary response"
+  });
+});
+
+// Internal call to sync all simpleFin user data, called every 8 hours by an external hook, never the client
+app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
+  try {
+    const pool = await sql.connect(azureConfig);
+
+    // Only users with SimpleFin credentials
+    const usersResult = await safeQuery(() =>
+      pool.request().query(`
+        SELECT id
+        FROM Users
+        WHERE simpleFinUsernameData IS NOT NULL
+          AND simpleFinPasswordData IS NOT NULL
+      `)
+    );
+
+    const users = usersResult.recordset;
+
+    console.log("Users to update: ", users);
+
+    let totalAccountsUpdated = 0;
+    let totalTransactionsInserted = 0;
+
+    for (const user of users) {
+      try {
+        const result = await syncSimpleFinDataForUser(user.id);
+        totalAccountsUpdated += result.accountBalanceUpdateCt;
+        totalTransactionsInserted += result.insertedTransactionsCt;
+      } catch (err) {
+        console.error(`[Cron] Failed user ${user.id}:`, err);
+      }
+    }
+
+    res.json({
+      success: true,
+      usersProcessed: users.length,
+      totalAccountsUpdated,
+      totalTransactionsInserted
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/register", async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+
+    const pool = await sql.connect(azureConfig);
+
+    // Check if email already exists
+    const existing = await pool.request()
+      .input("email", sql.VarChar(255), email)
+      .query(`SELECT id FROM Users WHERE email = @email`);
+
+    if (existing.recordset.length > 0) {
+      return res.status(409).json({ 
+        success: false, 
+        error: "Email already exists" 
+      });
+    }
+
+    // Hash password and generate userID
+    const hashed = await hashPassword(password);
+    const id = uuidv4();
+
+    // Insert new user into the Azure DB
+    await pool.request()
+      .input("id", sql.VarChar(50), id)
+      .input("email", sql.VarChar(255), email)
+      .input("passwordHash", sql.VarChar(255), hashed)
+      .input("lastSimpleFinSync", sql.DateTime, null)
+      .query(`
+        INSERT INTO Users (
+          id, email, passwordHash, lastSimpleFinSync
+        )
+        VALUES (@id, @email, @passwordHash, @lastSimpleFinSync)
+      `);
+
+    // Create a "Manual" transfer group by default for all users
+    const tgid = uuidv4();
+    await pool.request()
+      .input("tgid", sql.VarChar(50), tgid)
+      .input("userID", sql.VarChar(50), id)
+      .input("name", sql.VarChar(255), "Manual")
+      .query(`
+        INSERT INTO TransferGroups (id, userID, name)
+        VALUES (@tgid, @userID, @name)
+      `);
+
+    // Fetch the newly created user to return to the client
+    const newUserResult = await pool.request()
+      .input("id", sql.VarChar(50), id)
+      .query(`
+        SELECT 
+          id, email, lastSimpleFinSync, createdAt, updatedAt
+        FROM Users
+        WHERE id = @id
+      `);
+
+    const newUser = newUserResult.recordset[0];
+
+    // Generate JWT
+    const token = jwt.sign({ id: newUser.id, email: newUser.email }, JWT_SECRET);
+
+    res.json({ 
+      success: true, 
+      message: `New user registered`,
+      token,
+      user: newUser
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Login an existing user with email/password
 app.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) return res.status(400).json({ success: false, error: "Missing fields" });
     
-    // Connect to Azure DB
     const pool = await sql.connect(azureConfig);
 
-    // Select user with query
     const result = await pool.request()
       .input("email", sql.VarChar(255), email)
       .query(`
-        SELECT id, email, fetchFrequency, lastSimpleFinSync, simpleFinUsernameData, createdAt, updatedAt, passwordHash
+        SELECT id, email, lastSimpleFinSync, simpleFinUsernameData, createdAt, updatedAt, passwordHash
         FROM Users
         WHERE email = @email
       `);
 
-    // Ensure email exists, and compare the passwords
-    if (result.recordset.length === 0) return res.json({ success: false, message: "Invalid email and password" });    
+    if (result.recordset.length === 0) return res.json({ success: false, message: "Invalid email and password" });
+
     const user = result.recordset[0];
     const valid = await bcrypt.compare(password, user.passwordHash);
 
-    // Remove simpleFinUsernameData and passwordHash before returning
+    // Remove sensitive fields before returning
     const simpleFinCredentialsSet = !!user.simpleFinUsernameData;
     delete user.simpleFinUsernameData;
-    delete user.passwordHash;    
+    delete user.passwordHash;
 
-    // Return json success/fail 
     if (!valid) {
       return res.json({ success: false, message: "Invalid email and password" });
-    } else {
-      return res.json({ success: true, user: { ...user, simpleFinCredentialsSet }});
     }
+
+    // Generate JWT
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+
+    return res.json({ 
+      success: true, 
+      token,
+      user: { ...user, simpleFinCredentialsSet }
+    });
 
   } catch (err) {
     next(err);

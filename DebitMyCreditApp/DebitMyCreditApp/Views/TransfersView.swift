@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct TransactionsView: View {
+struct TransfersView: View {
     
     var body: some View {
     }
