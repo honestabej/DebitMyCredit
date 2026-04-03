@@ -1,0 +1,7 @@
+
+import CoreData
+
+extension CoreDataService {
+
+
+}

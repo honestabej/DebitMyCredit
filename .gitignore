@@ -10,6 +10,7 @@ npm-debug.log
 yarn.lock
 
 # iOS / Xcode
+/DebiMyCreditApp-Old
 /DebitMyCreditApp/DerivedData/
 DerivedData/
 *.xcuserstate
