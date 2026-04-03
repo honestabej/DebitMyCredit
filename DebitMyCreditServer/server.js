@@ -279,7 +279,8 @@ app.post("/connect-simplefin", async (req, res, next) => {
     } catch {
       return res.status(400).json({
         success: false,
-        message: "Invalid setup token format"
+        message: "Invalid setup token format",
+        accounts: null
       });
     }
 
@@ -295,7 +296,8 @@ app.post("/connect-simplefin", async (req, res, next) => {
     } catch (err) {
       return res.status(400).json({
         success: false,
-        message: "Failed to claim SimpleFIN token (may be expired or already used)"
+        message: "Failed to claim SimpleFIN token (may be expired or already used)",
+        accounts: null
       });
     }
 
@@ -307,7 +309,8 @@ app.post("/connect-simplefin", async (req, res, next) => {
     } catch (err) {
       return res.status(500).json({
         success: false,
-        message: "Failed to fetch accounts from SimpleFIN"
+        message: "Failed to fetch accounts from SimpleFIN",
+        accounts: null
       });
     }
 
