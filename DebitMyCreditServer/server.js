@@ -192,7 +192,7 @@ app.post("/login", async (req, res, next) => {
     const result = await pool.request()
       .input("email", sql.VarChar(255), email)
       .query(`
-        SELECT id, email, lastSimpleFinSync, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
+        SELECT id, email, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
         FROM Users
         WHERE email = @email
       `);
