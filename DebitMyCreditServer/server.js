@@ -192,7 +192,7 @@ app.post("/login", async (req, res, next) => {
     const result = await pool.request()
       .input("email", sql.VarChar(255), email)
       .query(`
-        SELECT id, email, lastSimpleFinSync, simpleFinUsernameData, createdAt, updatedAt, passwordHash
+        SELECT id, email, lastSimpleFinSync, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
         FROM Users
         WHERE email = @email
       `);
@@ -204,7 +204,7 @@ app.post("/login", async (req, res, next) => {
 
     // Remove sensitive fields before returning
     const simpleFinCredentialsSet = !!user.simpleFinUsernameData;
-    delete user.simpleFinUsernameData;
+    delete user.simpleFinAccessURLData;
     delete user.passwordHash;
 
     if (!valid) {
@@ -359,7 +359,6 @@ app.post("/connect-simplefin", async (req, res, next) => {
       throw dbErr;
     }
 
-
   } catch (err) {
     next(err);
   } 
@@ -397,7 +396,7 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
         message: "User not found or already disconnected"
       });
     }
-    
+
     res.json({
       success: true,
       message: "SimpleFIN account disconnected"

@@ -1,6 +1,0 @@
-import CoreData
-
-extension CoreDataService {
-
-}
-
