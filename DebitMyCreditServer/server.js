@@ -134,12 +134,11 @@ app.post("/register", async (req, res, next) => {
       .input("id", sql.VarChar(50), id)
       .input("email", sql.VarChar(255), email)
       .input("passwordHash", sql.VarChar(255), hashed)
-      .input("lastSimpleFinSync", sql.DateTime, null)
       .query(`
         INSERT INTO Users (
-          id, email, passwordHash, lastSimpleFinSync
+          id, email, passwordHash
         )
-        VALUES (@id, @email, @passwordHash, @lastSimpleFinSync)
+        VALUES (@id, @email, @passwordHash)
       `);
 
     // Create a "Manual" transfer group by default for all users
@@ -158,7 +157,7 @@ app.post("/register", async (req, res, next) => {
       .input("id", sql.VarChar(50), id)
       .query(`
         SELECT 
-          id, email, lastSimpleFinSync, createdAt, updatedAt
+          id, email, createdAt, updatedAt
         FROM Users
         WHERE id = @id
       `);
