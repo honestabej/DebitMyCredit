@@ -90,56 +90,16 @@ function getUnixTime30DaysAgo() {
 /*****************************************
  * API Endpoints
  *****************************************/
+app.get("/", async (req, res, next) => {
+
+})
+
 // Internal call from GitHub action to keep DB up to date
 app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
   res.json({
     success: true,
     message: "Temporary response"
   });
-});
-
-// Internal call to sync all simpleFin user data, called every 8 hours by an external hook, never the client
-app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
-  try {
-    const pool = await sql.connect(azureConfig);
-
-    // Only users with SimpleFin credentials
-    const usersResult = await safeQuery(() =>
-      pool.request().query(`
-        SELECT id
-        FROM Users
-        WHERE simpleFinUsernameData IS NOT NULL
-          AND simpleFinPasswordData IS NOT NULL
-      `)
-    );
-
-    const users = usersResult.recordset;
-
-    console.log("Users to update: ", users);
-
-    let totalAccountsUpdated = 0;
-    let totalTransactionsInserted = 0;
-
-    for (const user of users) {
-      try {
-        const result = await syncSimpleFinDataForUser(user.id);
-        totalAccountsUpdated += result.accountBalanceUpdateCt;
-        totalTransactionsInserted += result.insertedTransactionsCt;
-      } catch (err) {
-        console.error(`[Cron] Failed user ${user.id}:`, err);
-      }
-    }
-
-    res.json({
-      success: true,
-      usersProcessed: users.length,
-      totalAccountsUpdated,
-      totalTransactionsInserted
-    });
-
-  } catch (err) {
-    next(err);
-  }
 });
 
 // Register a new user
@@ -270,7 +230,11 @@ app.post("/connect-simplefin", async (req, res, next) => {
   try {
     // Get id and token from user
     const { userID, setupToken } = req.body;
-    if (!userID || !setupToken) return res.status(400).json({ error: "userID and setup token required" });
+    if (!userID || !setupToken) return res.status(400).json({ 
+      success: false,
+      message: "userID and setup token required",
+      accounts: null
+    });
 
     // Decode setup token into claim url
     let claimUrl;
@@ -395,6 +359,49 @@ app.post("/connect-simplefin", async (req, res, next) => {
       throw dbErr;
     }
 
+
+  } catch (err) {
+    next(err);
+  } 
+});
+
+// Disconnect a User's SimpleFIN account
+app.post("/disconnect-simplefin", async (req, res, next) => {
+  try {
+    // Get id and token from user
+    const { userID } = req.body;
+    if (!userID) return res.status(400).json({ 
+      success: false,
+      message: "userID required"
+    });
+
+    // Connect to the Azure DB
+    const pool = await sql.connect(azureConfig);
+
+    // Query the DB to set the SimpleFIN data to NULL
+    const result = await pool.request()
+      .input("userID", sql.UniqueIdentifier, userID)
+      .query(`
+        UPDATE Users
+        SET simpleFinAccessURLData = NULL,
+            simpleFinAccessURLIV = NULL,
+            simpleFinAccessURLTag = NULL,
+            updatedAt = SYSUTCDATETIME()
+        WHERE id = @userID
+      `);
+    
+    // Ensure that the rows were edited
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or already disconnected"
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "SimpleFIN account disconnected"
+    });
 
   } catch (err) {
     next(err);
