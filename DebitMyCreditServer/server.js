@@ -84,14 +84,147 @@ function getUnixTime30DaysAgo() {
   return Math.floor(thirtyDaysAgo.getTime() / 1000);
 }
 
+// Wrapper for any SQL Query to the DB to handle sleeping DB issues
+async function queryWithRetry(callback, options = {}) {
+  const maxRetries = options.maxRetries || 3;
+  const retryDelay = options.retryDelay || 5000; // 5 seconds
+  const trackAttempts = options.trackAttempts || false; // New option to return attempt count
+  
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[DB] Connection attempt ${attempt}/${maxRetries}`);
+      
+      // Try to connect to the database
+      const pool = await sql.connect(azureConfig);
+      
+      console.log(`[DB] Connected successfully on attempt ${attempt}`);
+      
+      // Execute the callback with the connected pool
+      const result = await callback(pool);
+      
+      // If tracking attempts, wrap result with metadata
+      if (trackAttempts) {
+        return {
+          success: true,
+          data: result,
+          attempts: attempt
+        };
+      }
+      
+      return result;
+      
+    } catch (err) {
+      lastError = err;
+      
+      // Check if it's a connection error
+      const isConnectionError = 
+        err.code === 'ETIMEOUT' || 
+        err.code === 'ESOCKET' ||
+        (err.name === 'ConnectionError' && err.message.includes('Failed to connect'));
+      
+      if (isConnectionError && attempt < maxRetries) {
+        console.log(`[DB] ⚠️  Connection failed (attempt ${attempt}/${maxRetries}): ${err.message}`);
+        console.log(`[DB] 🔄 Retrying in ${retryDelay/1000} seconds...`);
+        
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      } else {
+        // Either it's not a connection error, or we've exhausted retries
+        console.log(`[DB] Database operation failed:`, err.message);
+        
+        // If tracking attempts, wrap error with metadata
+        if (trackAttempts) {
+          return {
+            success: false,
+            error: err,
+            attempts: attempt
+          };
+        }
+        
+        throw err;
+      }
+    }
+  }
+  
+  // If we get here, all retries failed
+  if (trackAttempts) {
+    return {
+      success: false,
+      error: lastError,
+      attempts: maxRetries
+    };
+  }
+  
+  throw lastError;
+}
+
 
 
 
 /*****************************************
  * API Endpoints
  *****************************************/
-app.get("/", async (req, res, next) => {
+app.get("/status", async (req, res, next) => {
+  try {
+    // Server is always "up" if we can respond
+    const serverStatus = {
+      status: "up",
+      timestamp: new Date().toISOString()
+    };
 
+    const startTime = Date.now();
+
+    // Use queryWithRetry with attempt tracking enabled
+    const dbResult = await queryWithRetry(
+      async (pool) => {
+        await pool.request().query('SELECT 1 AS healthCheck');
+        return true; // Just return success indicator
+      },
+      {
+        maxRetries: 3,
+        retryDelay: 3000, // 3 seconds for health checks
+        trackAttempts: true // Enable attempt tracking
+      }
+    );
+
+    const responseTime = Date.now() - startTime;
+
+    // Build database status from the result
+    let dbStatus;
+    
+    if (dbResult.success) {
+      dbStatus = {
+        status: "up",
+        message: dbResult.attempts === 1 
+          ? "Connected immediately" 
+          : `Connected after ${dbResult.attempts} attempts`,
+        responseTime: `${responseTime}ms`,
+        attempts: dbResult.attempts
+      };
+    } else {
+      dbStatus = {
+        status: "down",
+        message: dbResult.error?.code === 'ETIMEOUT' || dbResult.error?.name === 'ConnectionError'
+          ? `Database unreachable after ${dbResult.attempts} attempts`
+          : "Database error occurred",
+        responseTime: `${responseTime}ms`,
+        attempts: dbResult.attempts,
+        error: dbResult.error?.message
+      };
+    }
+
+    // Return overall status
+    res.json({
+      server: serverStatus,
+      database: dbStatus,
+      overall: dbStatus.status === "up" ? "healthy" : "degraded"
+    });
+
+  } catch (err) {
+    next(err);
+  }
 })
 
 // Internal call from GitHub action to keep DB up to date
@@ -111,67 +244,76 @@ app.post("/register", async (req, res, next) => {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const pool = await sql.connect(azureConfig);
+    // Hash password and generate userID BEFORE the database call
+    const hashed = await hashPassword(password);
+    const id = uuidv4();
+    const tgid = uuidv4();
 
-    // Check if email already exists
-    const existing = await pool.request()
-      .input("email", sql.VarChar(255), email)
-      .query(`SELECT id FROM Users WHERE email = @email`);
+    // Wrap ALL database operations in the retry wrapper
+    const result = await queryWithRetry(async (pool) => {
+      // Check if email already exists
+      const existing = await pool.request()
+        .input("email", sql.VarChar(255), email)
+        .query(`SELECT id FROM Users WHERE email = @email`);
 
-    if (existing.recordset.length > 0) {
+      if (existing.recordset.length > 0) {
+        return { emailExists: true };
+      }
+
+      // Insert new user into the Azure DB
+      await pool.request()
+        .input("id", sql.VarChar(50), id)
+        .input("email", sql.VarChar(255), email)
+        .input("passwordHash", sql.VarChar(255), hashed)
+        .query(`
+          INSERT INTO Users (
+            id, email, passwordHash
+          )
+          VALUES (@id, @email, @passwordHash)
+        `);
+
+      // Create a "Manual" transfer group by default for all users
+      await pool.request()
+        .input("tgid", sql.VarChar(50), tgid)
+        .input("userID", sql.VarChar(50), id)
+        .input("name", sql.VarChar(255), "Manual")
+        .query(`
+          INSERT INTO TransferGroups (id, userID, name)
+          VALUES (@tgid, @userID, @name)
+        `);
+
+      // Fetch the newly created user to return to the client
+      const newUserResult = await pool.request()
+        .input("id", sql.VarChar(50), id)
+        .query(`
+          SELECT 
+            id, email, createdAt, updatedAt
+          FROM Users
+          WHERE id = @id
+        `);
+
+      return { 
+        emailExists: false,
+        user: newUserResult.recordset[0]
+      };
+    });
+
+    // Handle the result OUTSIDE the wrapper
+    if (result.emailExists) {
       return res.status(409).json({ 
         success: false, 
         error: "Email already exists" 
       });
     }
 
-    // Hash password and generate userID
-    const hashed = await hashPassword(password);
-    const id = uuidv4();
-
-    // Insert new user into the Azure DB
-    await pool.request()
-      .input("id", sql.VarChar(50), id)
-      .input("email", sql.VarChar(255), email)
-      .input("passwordHash", sql.VarChar(255), hashed)
-      .query(`
-        INSERT INTO Users (
-          id, email, passwordHash
-        )
-        VALUES (@id, @email, @passwordHash)
-      `);
-
-    // Create a "Manual" transfer group by default for all users
-    const tgid = uuidv4();
-    await pool.request()
-      .input("tgid", sql.VarChar(50), tgid)
-      .input("userID", sql.VarChar(50), id)
-      .input("name", sql.VarChar(255), "Manual")
-      .query(`
-        INSERT INTO TransferGroups (id, userID, name)
-        VALUES (@tgid, @userID, @name)
-      `);
-
-    // Fetch the newly created user to return to the client
-    const newUserResult = await pool.request()
-      .input("id", sql.VarChar(50), id)
-      .query(`
-        SELECT 
-          id, email, createdAt, updatedAt
-        FROM Users
-        WHERE id = @id
-      `);
-
-    const newUser = newUserResult.recordset[0];
-
     // Generate JWT
-    const token = jwt.sign({ id: newUser.id, email: newUser.email }, JWT_SECRET);
+    const token = jwt.sign({ id: result.user.id, email: result.user.email }, JWT_SECRET);
 
     res.json({ 
       success: true, 
       message: `New user registered`,
       token,
-      user: newUser
+      user: result.user
     });
 
   } catch (err) {
@@ -186,37 +328,56 @@ app.post("/login", async (req, res, next) => {
 
     if (!email || !password) return res.status(400).json({ success: false, error: "Missing fields" });
     
-    const pool = await sql.connect(azureConfig);
+    // Use the database retry wrapper
+    const result = await queryWithRetry(async (pool) => {
+      const queryResult = await pool.request()
+        .input("email", sql.VarChar(255), email)
+        .query(`
+          SELECT id, email, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
+          FROM Users
+          WHERE email = @email
+        `);
 
-    const result = await pool.request()
-      .input("email", sql.VarChar(255), email)
-      .query(`
-        SELECT id, email, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
-        FROM Users
-        WHERE email = @email
-      `);
+      if (queryResult.recordset.length === 0) {
+        return { found: false };
+      }
 
-    if (result.recordset.length === 0) return res.json({ success: false, message: "Invalid email and password" });
+      const user = queryResult.recordset[0];
+      const valid = await bcrypt.compare(password, user.passwordHash);
 
-    const user = result.recordset[0];
-    const valid = await bcrypt.compare(password, user.passwordHash);
+      // Remove sensitive fields before returning
+      const simpleFinCredentialsSet = !!user.simpleFinAccessURLData;
+      delete user.simpleFinAccessURLData;
+      delete user.passwordHash;
 
-    // Remove sensitive fields before returning
-    const simpleFinCredentialsSet = !!user.simpleFinUsernameData;
-    delete user.simpleFinAccessURLData;
-    delete user.passwordHash;
+      if (!valid) {
+        return { found: true, valid: false };
+      }
 
-    if (!valid) {
+      // Generate JWT
+      const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+
+      return { 
+        found: true, 
+        valid: true,
+        token,
+        user: { ...user, simpleFinCredentialsSet }
+      };
+    });
+
+    // Handle the result
+    if (!result.found) {
       return res.json({ success: false, message: "Invalid email and password" });
     }
 
-    // Generate JWT
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+    if (!result.valid) {
+      return res.json({ success: false, message: "Invalid email and password" });
+    }
 
     return res.json({ 
       success: true, 
-      token,
-      user: { ...user, simpleFinCredentialsSet }
+      token: result.token,
+      user: result.user
     });
 
   } catch (err) {
@@ -280,83 +441,87 @@ app.post("/connect-simplefin", async (req, res, next) => {
     // Encrypt the access url before storing it in the database
     const accessEnc = encrypt(accessUrl);
 
-    // Connect to Azure database
-    const pool = await sql.connect(azureConfig);
+    // Wrap ALL database operations (including transaction) in the retry wrapper
+    const userAccounts = await queryWithRetry(async (pool) => {
+      // Begin transaction
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
 
-    // Begin transaction
-    const transaction = new sql.Transaction(pool);
-    await transaction.begin();
-
-    try {
-      // Store access URL in Users table
-      await new sql.Request(transaction)
-        .input("userID", sql.UniqueIdentifier, userID)
-        .input("data", sql.VarChar(sql.MAX), accessEnc.data)
-        .input("iv", sql.VarChar(32), accessEnc.iv)
-        .input("tag", sql.VarChar(32), accessEnc.tag)
-        .query(`
-          UPDATE Users
-          SET simpleFinAccessURLData = @data,
-              simpleFinAccessURLIV = @iv,
-              simpleFinAccessURLTag = @tag,
-              updatedAt = SYSUTCDATETIME()
-          WHERE id = @userID
-        `);
-
-      // Upsert accounts
-      for (const account of accounts) {
-        // Format the balance-date correctly
-        const balanceDate = account["balance-date"]
-          ? new Date(account["balance-date"] * 1000)
-          : null;
-
+      try {
+        // Store access URL in Users table
         await new sql.Request(transaction)
-          .input("id", sql.VarChar(100), account.id)
           .input("userID", sql.UniqueIdentifier, userID)
-          .input("name", sql.NVarChar(255), account.name)
-          .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
-          .input("balanceDate", sql.DateTimeOffset, balanceDate)
+          .input("data", sql.VarChar(sql.MAX), accessEnc.data)
+          .input("iv", sql.VarChar(32), accessEnc.iv)
+          .input("tag", sql.VarChar(32), accessEnc.tag)
           .query(`
-            -- Update the account if it already exists
-            UPDATE Accounts
-            SET name = @name,
-                accountBalance = @accountBalance,
-                balanceDate = @balanceDate,
+            UPDATE Users
+            SET simpleFinAccessURLData = @data,
+                simpleFinAccessURLIV = @iv,
+                simpleFinAccessURLTag = @tag,
                 updatedAt = SYSUTCDATETIME()
-            WHERE id = @id AND userID = @userID;
-
-            -- If the account did no exist, insert new account with type 'N/A'
-            IF @@ROWCOUNT = 0
-            BEGIN
-              INSERT INTO Accounts (
-                id, userID, name, accountBalance, balanceDate,
-                accountType, createdAt, updatedAt
-              )
-              VALUES (
-                @id, @userID, @name, @accountBalance, @balanceDate,
-                'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
-              )
-            END
+            WHERE id = @userID
           `);
+
+        // Upsert accounts
+        for (const account of accounts) {
+          // Format the balance-date correctly
+          const balanceDate = account["balance-date"]
+            ? new Date(account["balance-date"] * 1000)
+            : null;
+
+          await new sql.Request(transaction)
+            .input("id", sql.VarChar(100), account.id)
+            .input("userID", sql.UniqueIdentifier, userID)
+            .input("name", sql.NVarChar(255), account.name)
+            .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+            .input("balanceDate", sql.DateTimeOffset, balanceDate)
+            .query(`
+              -- Update the account if it already exists
+              UPDATE Accounts
+              SET name = @name,
+                  accountBalance = @accountBalance,
+                  balanceDate = @balanceDate,
+                  updatedAt = SYSUTCDATETIME()
+              WHERE id = @id AND userID = @userID;
+
+              -- If the account did no exist, insert new account with type 'N/A'
+              IF @@ROWCOUNT = 0
+              BEGIN
+                INSERT INTO Accounts (
+                  id, userID, name, accountBalance, balanceDate,
+                  accountType, createdAt, updatedAt
+                )
+                VALUES (
+                  @id, @userID, @name, @accountBalance, @balanceDate,
+                  'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
+                )
+              END
+            `);
+        }
+
+        await transaction.commit();
+
+        // After all updates, fetch all accounts for this user
+        const result = await pool.request()
+            .input("userID", sql.UniqueIdentifier, userID)
+            .query(`SELECT id, name, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+
+        // Return the accounts data
+        return result.recordset;
+
+      } catch (dbErr) {
+        await transaction.rollback();
+        throw dbErr;
       }
+    });
 
-      await transaction.commit();
-
-      // After all updates, fetch all accounts for this user
-      const userAccounts = await pool.request()
-          .input("userID", sql.UniqueIdentifier, userID)
-          .query(`SELECT id, name, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
-
-      return res.json({
-        success: true,
-        message: "SimpleFIN connected successfully",
-        accounts: userAccounts.recordset
-      });
-
-    } catch (dbErr) {
-      await transaction.rollback();
-      throw dbErr;
-    }
+    // Send response OUTSIDE the wrapper
+    return res.json({
+      success: true,
+      message: "SimpleFIN connected successfully",
+      accounts: userAccounts
+    });
 
   } catch (err) {
     next(err);
@@ -373,23 +538,25 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
       message: "userID required"
     });
 
-    // Connect to the Azure DB
-    const pool = await sql.connect(azureConfig);
-
-    // Query the DB to set the SimpleFIN data to NULL
-    const result = await pool.request()
-      .input("userID", sql.UniqueIdentifier, userID)
-      .query(`
-        UPDATE Users
-        SET simpleFinAccessURLData = NULL,
-            simpleFinAccessURLIV = NULL,
-            simpleFinAccessURLTag = NULL,
-            updatedAt = SYSUTCDATETIME()
-        WHERE id = @userID
-      `);
+    // Wrap database operations in retry wrapper
+    const result = await queryWithRetry(async (pool) => {
+      // Query the DB to set the SimpleFIN data to NULL
+      const updateResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE Users
+          SET simpleFinAccessURLData = NULL,
+              simpleFinAccessURLIV = NULL,
+              simpleFinAccessURLTag = NULL,
+              updatedAt = SYSUTCDATETIME()
+          WHERE id = @userID
+        `);
+      
+      return { rowsAffected: updateResult.rowsAffected[0] };
+    });
     
-    // Ensure that the rows were edited
-    if (result.rowsAffected[0] === 0) {
+    // Check result OUTSIDE the wrapper
+    if (result.rowsAffected === 0) {
       return res.status(404).json({
         success: false,
         message: "User not found or already disconnected"
@@ -404,4 +571,37 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
   } catch (err) {
     next(err);
   } 
+});
+
+/*****************************************
+ * Global Error Handling
+ *****************************************/
+app.use((err, req, res, next) => {
+  console.error('Error occurred:', err);
+
+  // Check if it's a database connection error
+  if (err.code === 'ETIMEOUT' || err.code === 'ESOCKET' || 
+      (err.name === 'ConnectionError' && err.message.includes('Failed to connect'))) {
+    return res.status(503).json({
+      success: false,
+      message: "Database is starting up, please try again in a moment",
+      error: "DatabaseUnavailable"
+    });
+  }
+
+  // Other SQL/Database errors
+  if (err.name === 'ConnectionError' || err.name === 'RequestError') {
+    return res.status(500).json({
+      success: false,
+      message: "Database error occurred",
+      error: "DatabaseError"
+    });
+  }
+
+  // Generic server error
+  res.status(500).json({
+    success: false,
+    message: err.message || "Internal server error",
+    error: "ServerError"
+  });
 });
