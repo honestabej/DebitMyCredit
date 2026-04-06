@@ -184,7 +184,7 @@ app.get("/status", async (req, res, next) => {
       },
       {
         maxRetries: 3,
-        retryDelay: 3000, // 3 seconds for health checks
+        retryDelay: 5000, // 5 seconds for health checks
         trackAttempts: true // Enable attempt tracking
       }
     );
