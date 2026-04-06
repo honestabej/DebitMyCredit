@@ -87,7 +87,7 @@ function getUnixTime30DaysAgo() {
 // Wrapper for any SQL Query to the DB to handle sleeping DB issues
 async function queryWithRetry(callback, options = {}) {
   const maxRetries = options.maxRetries || 3;
-  const retryDelay = options.retryDelay || 5000; // 5 seconds
+  const retryDelay = options.retryDelay || 5000; // 5 seconds (balanced for DB wake-up time)
   const trackAttempts = options.trackAttempts || false; // New option to return attempt count
   
   let lastError;
@@ -125,8 +125,8 @@ async function queryWithRetry(callback, options = {}) {
         (err.name === 'ConnectionError' && err.message.includes('Failed to connect'));
       
       if (isConnectionError && attempt < maxRetries) {
-        console.log(`[DB] ⚠️  Connection failed (attempt ${attempt}/${maxRetries}): ${err.message}`);
-        console.log(`[DB] 🔄 Retrying in ${retryDelay/1000} seconds...`);
+        console.log(`[DB] Connection failed (attempt ${attempt}/${maxRetries}): ${err.message}`);
+        console.log(`[DB] Retrying in ${retryDelay/1000} seconds...`);
         
         // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -159,9 +159,6 @@ async function queryWithRetry(callback, options = {}) {
   
   throw lastError;
 }
-
-
-
 
 /*****************************************
  * API Endpoints
@@ -345,8 +342,10 @@ app.post("/login", async (req, res, next) => {
       const user = queryResult.recordset[0];
       const valid = await bcrypt.compare(password, user.passwordHash);
 
+      // Check if SimpleFIN credentials are set
+      const simpleFINConnected = user.simpleFinAccessURLData != null && user.simpleFinAccessURLData !== '';
+      
       // Remove sensitive fields before returning
-      const simpleFinCredentialsSet = !!user.simpleFinAccessURLData;
       delete user.simpleFinAccessURLData;
       delete user.passwordHash;
 
@@ -361,7 +360,7 @@ app.post("/login", async (req, res, next) => {
         found: true, 
         valid: true,
         token,
-        user: { ...user, simpleFinCredentialsSet }
+        user: { ...user, simpleFINConnected }
       };
     });
 
@@ -374,11 +373,15 @@ app.post("/login", async (req, res, next) => {
       return res.json({ success: false, message: "Invalid email and password" });
     }
 
-    return res.json({ 
+    const responseData = { 
       success: true, 
       token: result.token,
       user: result.user
-    });
+    };
+    
+    // console.log("Final response user object:", JSON.stringify(result.user, null, 2));
+
+    return res.json(responseData);
 
   } catch (err) {
     next(err);
@@ -416,7 +419,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
 
       if (!accessUrl || typeof accessUrl !== "string") {
         throw new Error("Invalid claim response");
-      }
+      } 
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -584,7 +587,7 @@ app.use((err, req, res, next) => {
       (err.name === 'ConnectionError' && err.message.includes('Failed to connect'))) {
     return res.status(503).json({
       success: false,
-      message: "Database is starting up, please try again in a moment",
+      message: "Could not connect to DB, please try again in a moment",
       error: "DatabaseUnavailable"
     });
   }
