@@ -68,6 +68,25 @@ function verifyCron(req, res, next) {
   next();
 }
 
+// Uses the JWT to authenticate requests
+function authRequired(req, res, next) {
+  try {
+    const auth = req.header("Authorization") || "";
+    const [scheme, token] = auth.split(" ");
+
+    if (scheme !== "Bearer" || !token) {
+      return res.status(401).json({ success: false, message: "Missing or invalid Authorization header" });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    // decoded should contain { id, email } from your existing login/register code
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
+  }
+}
+
 function toSqlDateTimeOffset(value) {
   const d = new Date(value);
   if (isNaN(d)) return null;
@@ -160,6 +179,7 @@ async function queryWithRetry(callback, options = {}) {
   throw lastError;
 }
 
+
 /*****************************************
  * API Endpoints
  *****************************************/
@@ -224,13 +244,624 @@ app.get("/status", async (req, res, next) => {
   }
 })
 
+app.get("/test", async (req, res, next) => {
+  try {
+    const { userID } = req.query;
+    
+    if (!userID) {
+      return res.status(400).json({ 
+        success: false,
+        message: "userID required as query parameter"
+      });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      const queryResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT 
+            simpleFinAccessURLData,
+            simpleFinAccessURLIV,
+            simpleFinAccessURLTag
+          FROM Users
+          WHERE id = @userID
+        `);
+
+      if (queryResult.recordset.length === 0) {
+        return { found: false };
+      }
+
+      const user = queryResult.recordset[0];
+      
+      // Check if SimpleFin data exists
+      if (!user.simpleFinAccessURLData || !user.simpleFinAccessURLIV || !user.simpleFinAccessURLTag) {
+        return { 
+          found: true, 
+          hasSimpleFin: false 
+        };
+      }
+
+      // Decrypt the access URL
+      const accessUrl = decrypt({
+        data: user.simpleFinAccessURLData,
+        iv: user.simpleFinAccessURLIV,
+        tag: user.simpleFinAccessURLTag
+      });
+
+      return {
+        found: true,
+        hasSimpleFin: true,
+        accessUrl
+      };
+    });
+
+    // Handle results
+    if (!result.found) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    if (!result.hasSimpleFin) {
+      return res.json({
+        success: true,
+        message: "User has no SimpleFin connection",
+        accessUrl: null
+      });
+    }
+
+    const accountResponse = await axios.get(`${result.accessUrl}/accounts`);
+
+    res.json({
+      success: true,
+      accessUrl: result.accessUrl,
+      accounts: accountResponse.data.accounts
+    });
+
+  } catch (err) {
+    next(err);
+  }
+})
+
 // Internal call from GitHub action to keep DB up to date
 app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
-  res.json({
-    success: true,
-    message: "Temporary response"
-  });
+  try {
+    let usersProcessed = 0;
+    let totalAccountsUpdated = 0;
+    let totalTransactionsInserted = 0;
+    const errors = [];
+
+    // Get all of the userIDs and accessURL params of users that have accessURLs
+    const usersWithAccess = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .query(`
+          SELECT 
+            id,
+            simpleFinAccessURLData,
+            simpleFinAccessURLIV,
+            simpleFinAccessURLTag
+          FROM Users
+          WHERE simpleFinAccessURLData IS NOT NULL
+            AND simpleFinAccessURLIV IS NOT NULL
+            AND simpleFinAccessURLTag IS NOT NULL
+        `);
+      return result.recordset;
+    });
+
+    console.log(`[SYNC] Found ${usersWithAccess.length} users with SimpleFin access`);
+
+    // Process each user
+    for (const user of usersWithAccess) {
+      try {
+        // Decrypt the accessURL
+        const accessUrl = decrypt({
+          data: user.simpleFinAccessURLData,
+          iv: user.simpleFinAccessURLIV,
+          tag: user.simpleFinAccessURLTag
+        });
+
+        // Use the accessURL to call out to accessURL/accounts&include=transactions&start-date=${getUnixTime30DaysAgo()}
+        const simpleFinResponse = await axios.get(
+          `${accessUrl}/accounts`,
+          {
+            params: {
+              pending: 1,
+              include: 'transactions',
+              'start-date': getUnixTime30DaysAgo()
+            }
+          }
+        );
+
+        const accounts = simpleFinResponse.data.accounts;
+        console.log(`[SYNC] User ${user.id}: Fetched ${accounts.length} accounts from SimpleFin`);
+
+        // Process accounts and transactions within a transaction
+        const { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved } = await queryWithRetry(async (pool) => {
+          const transaction = new sql.Transaction(pool);
+          await transaction.begin();
+
+          let accountsUpdated = 0;
+          let accountsAdded = 0;
+          let transactionsInserted = 0;
+          let pendingTransactionsRemoved = 0;
+
+          try {
+            for (const account of accounts) {
+              // Get the user's account from DB to check account type
+              const accountQuery = await new sql.Request(transaction)
+                .input("accountId", sql.VarChar(100), account.id)
+                .input("userId", sql.UniqueIdentifier, user.id)
+                .query(`
+                  SELECT id, accountType
+                  FROM Accounts
+                  WHERE id = @accountId AND userID = @userId
+                `);
+
+              let dbAccount;
+
+              // If account doesn't exist in our DB, add it with accountType 'N/A'
+              if (accountQuery.recordset.length === 0) {
+                console.log(`[SYNC] User ${user.id}: Account ${account.id} not found in DB, creating it`);
+                
+                const balanceDate = account["balance-date"]
+                  ? new Date(account["balance-date"] * 1000)
+                  : null;
+
+                await new sql.Request(transaction)
+                  .input("id", sql.VarChar(100), account.id)
+                  .input("userID", sql.UniqueIdentifier, user.id)
+                  .input("name", sql.NVarChar(255), account.name)
+                  .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+                  .input("balanceDate", sql.DateTimeOffset, balanceDate)
+                  .input("accountType", sql.VarChar(50), 'N/A')
+                  .query(`
+                    INSERT INTO Accounts (
+                      id, userID, name, accountBalance, balanceDate,
+                      accountType, createdAt, updatedAt
+                    )
+                    VALUES (
+                      @id, @userID, @name, @accountBalance, @balanceDate,
+                      @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
+                    )
+                  `);
+
+                accountsAdded++;
+                dbAccount = { id: account.id, accountType: 'N/A' };
+              } else {
+                dbAccount = accountQuery.recordset[0];
+              }
+
+              // For any of the user's accounts that have accountType 'Debit', update the accountBalance with the SimpleFIN data
+              if (dbAccount.accountType === 'Debit') {
+                const balance = parseFloat(account["available-balance"]) || 0;
+                const balanceDate = account["balance-date"]
+                  ? new Date(account["balance-date"] * 1000)
+                  : null;
+
+                await new sql.Request(transaction)
+                  .input("accountId", sql.VarChar(100), account.id)
+                  .input("userId", sql.UniqueIdentifier, user.id)
+                  .input("balance", sql.Decimal(18, 2), balance)
+                  .input("balanceDate", sql.DateTimeOffset, balanceDate)
+                  .query(`
+                    UPDATE Accounts
+                    SET accountBalance = @balance,
+                        balanceDate = @balanceDate,
+                        updatedAt = SYSUTCDATETIME()
+                    WHERE id = @accountId AND userID = @userId
+                  `);
+
+                accountsUpdated++;
+                console.log(`[SYNC] User ${user.id}: Updated Debit account ${account.id} balance to ${balance}`);
+              }
+
+              // For any of the user's accounts that have account type 'Credit', get the transactions from the SimpleFin response of those accounts
+              // and add any of those transactions that dont exist into the Azure DB
+              if (dbAccount.accountType === 'Credit') {
+                // Get all pending transaction IDs from SimpleFIN for this account
+                const simpleFinTxnIds = account.transactions 
+                  ? account.transactions.map(txn => txn.id) 
+                  : [];
+
+                // Check for orphaned pending transactions in our DB that don't exist in SimpleFIN response
+                // These are transactions that were pending but SimpleFIN changed their ID when they posted
+                const orphanedTxns = await new sql.Request(transaction)
+                  .input("accountId", sql.VarChar(100), account.id)
+                  .query(`
+                    SELECT id 
+                    FROM Transactions 
+                    WHERE accountID = @accountId 
+                      AND pending = 1
+                  `);
+
+                // Remove pending transactions that no longer exist in SimpleFIN
+                for (const dbTxn of orphanedTxns.recordset) {
+                  if (!simpleFinTxnIds.includes(dbTxn.id)) {
+                    await new sql.Request(transaction)
+                      .input("txnId", sql.VarChar(100), dbTxn.id)
+                      .query(`
+                        DELETE FROM Transactions WHERE id = @txnId
+                      `);
+                    
+                    pendingTransactionsRemoved++;
+                    console.log(`[SYNC] User ${user.id}: Removed orphaned pending transaction ${dbTxn.id} from account ${account.id}`);
+                  }
+                }
+
+                // Now insert/update transactions from SimpleFIN
+                if (account.transactions) {
+                  for (const txn of account.transactions) {
+                    // Check if transaction already exists
+                    const existingTxn = await new sql.Request(transaction)
+                      .input("txnId", sql.VarChar(100), txn.id)
+                      .query(`
+                        SELECT id, pending FROM Transactions WHERE id = @txnId
+                      `);
+
+                    const txnDate = txn.posted
+                      ? new Date(txn.posted * 1000)
+                      : new Date();
+
+                    if (existingTxn.recordset.length === 0) {
+                      // Transaction doesn't exist, insert it
+                      await new sql.Request(transaction)
+                        .input("id", sql.VarChar(100), txn.id)
+                        .input("accountId", sql.VarChar(100), account.id)
+                        .input("userID", sql.UniqueIdentifier, user.id)
+                        .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
+                        .input("name", sql.NVarChar(500), txn.description || 'Unknown')
+                        .input("transactionDate", sql.DateTimeOffset, txnDate)
+                        .input("pending", sql.Bit, txn.pending || false)
+                        .query(`
+                          INSERT INTO Transactions (
+                            id, accountID, userID, amount, name, 
+                            transactionDate, pending, createdAt, updatedAt
+                          )
+                          VALUES (
+                            @id, @accountId, @userID, @amount, @name,
+                            @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
+                          )
+                        `);
+
+                      transactionsInserted++;
+                    } else {
+                      // Transaction exists - update if pending status changed
+                      const existingPending = existingTxn.recordset[0].pending;
+                      const newPending = txn.pending || false;
+
+                      if (existingPending !== newPending) {
+                        await new sql.Request(transaction)
+                          .input("txnId", sql.VarChar(100), txn.id)
+                          .input("pending", sql.Bit, newPending)
+                          .input("transactionDate", sql.DateTimeOffset, txnDate)
+                          .query(`
+                            UPDATE Transactions
+                            SET pending = @pending,
+                                transactionDate = @transactionDate,
+                                updatedAt = SYSUTCDATETIME()
+                            WHERE id = @txnId
+                          `);
+                        
+                        console.log(`[SYNC] User ${user.id}: Updated transaction ${txn.id} pending status from ${existingPending} to ${newPending}`);
+                      }
+                    }
+                  }
+                }
+
+                console.log(`[SYNC] User ${user.id}: Processed ${account.transactions?.length || 0} transactions for Credit account ${account.id}`);
+              }
+            }
+
+            await transaction.commit();
+            return { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved };
+
+          } catch (dbErr) {
+            await transaction.rollback();
+            throw dbErr;
+          }
+        });
+
+        // Keep track of user's processed, and totalAccountsUpdated/totalTransactionsInserted
+        usersProcessed++;
+        totalAccountsUpdated += accountsUpdated;
+        totalTransactionsInserted += transactionsInserted;
+
+        console.log(`[SYNC] User ${user.id}: Complete - ${accountsUpdated} accounts updated, ${accountsAdded} accounts added, ${transactionsInserted} transactions inserted, ${pendingTransactionsRemoved} pending transactions removed`);
+
+      } catch (userErr) {
+        console.error(`[SYNC] Error processing user ${user.id}:`, userErr.message);
+        errors.push({
+          userId: user.id,
+          error: userErr.message
+        });
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Sync complete: ${usersProcessed} users processed, ${totalAccountsUpdated} accounts updated, ${totalTransactionsInserted} transactions inserted`,
+      stats: {
+        usersProcessed,
+        totalAccountsUpdated,
+        totalTransactionsInserted,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
 });
+
+app.post("/manual/sync-simplefin-data", async (req, res, next) => {
+  try {
+    let usersProcessed = 0;
+    let totalAccountsUpdated = 0;
+    let totalTransactionsInserted = 0;
+    const errors = [];
+
+    // Get all of the userIDs and accessURL params of users that have accessURLs
+    const usersWithAccess = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .query(`
+          SELECT 
+            id,
+            simpleFinAccessURLData,
+            simpleFinAccessURLIV,
+            simpleFinAccessURLTag
+          FROM Users
+          WHERE simpleFinAccessURLData IS NOT NULL
+            AND simpleFinAccessURLIV IS NOT NULL
+            AND simpleFinAccessURLTag IS NOT NULL
+        `);
+      return result.recordset;
+    });
+
+    console.log(`[SYNC] Found ${usersWithAccess.length} users with SimpleFin access`);
+
+    // Process each user
+    for (const user of usersWithAccess) {
+      try {
+        // Decrypt the accessURL
+        const accessUrl = decrypt({
+          data: user.simpleFinAccessURLData,
+          iv: user.simpleFinAccessURLIV,
+          tag: user.simpleFinAccessURLTag
+        });
+
+        // Use the accessURL to call out to accessURL/accounts&include=transactions&start-date=${getUnixTime30DaysAgo()}
+        const simpleFinResponse = await axios.get(
+          `${accessUrl}/accounts`,
+          {
+            params: {
+              pending: 1,
+              include: 'transactions',
+              'start-date': getUnixTime30DaysAgo()
+            }
+          }
+        );
+
+        const accounts = simpleFinResponse.data.accounts;
+        console.log(`[SYNC] User ${user.id}: Fetched ${accounts.length} accounts from SimpleFin`);
+
+        // Process accounts and transactions within a transaction
+        const { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved } = await queryWithRetry(async (pool) => {
+          const transaction = new sql.Transaction(pool);
+          await transaction.begin();
+
+          let accountsUpdated = 0;
+          let accountsAdded = 0;
+          let transactionsInserted = 0;
+          let pendingTransactionsRemoved = 0;
+
+          try {
+            for (const account of accounts) {
+              // Get the user's account from DB to check account type
+              const accountQuery = await new sql.Request(transaction)
+                .input("accountId", sql.VarChar(100), account.id)
+                .input("userId", sql.UniqueIdentifier, user.id)
+                .query(`
+                  SELECT id, accountType
+                  FROM Accounts
+                  WHERE id = @accountId AND userID = @userId
+                `);
+
+              let dbAccount;
+
+              // If account doesn't exist in our DB, add it with accountType 'N/A'
+              if (accountQuery.recordset.length === 0) {
+                console.log(`[SYNC] User ${user.id}: Account ${account.id} not found in DB, creating it`);
+                
+                const balanceDate = account["balance-date"]
+                  ? new Date(account["balance-date"] * 1000)
+                  : null;
+
+                await new sql.Request(transaction)
+                  .input("id", sql.VarChar(100), account.id)
+                  .input("userID", sql.UniqueIdentifier, user.id)
+                  .input("name", sql.NVarChar(255), account.name)
+                  .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+                  .input("balanceDate", sql.DateTimeOffset, balanceDate)
+                  .input("accountType", sql.VarChar(50), 'N/A')
+                  .query(`
+                    INSERT INTO Accounts (
+                      id, userID, name, accountBalance, balanceDate,
+                      accountType, createdAt, updatedAt
+                    )
+                    VALUES (
+                      @id, @userID, @name, @accountBalance, @balanceDate,
+                      @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
+                    )
+                  `);
+
+                accountsAdded++;
+                dbAccount = { id: account.id, accountType: 'N/A' };
+              } else {
+                dbAccount = accountQuery.recordset[0];
+              }
+
+              // For any of the user's accounts that have accountType 'Debit', update the accountBalance with the SimpleFIN data
+              if (dbAccount.accountType === 'Debit') {
+                const balance = parseFloat(account["available-balance"]) || 0;
+                const balanceDate = account["balance-date"]
+                  ? new Date(account["balance-date"] * 1000)
+                  : null;
+
+                await new sql.Request(transaction)
+                  .input("accountId", sql.VarChar(100), account.id)
+                  .input("userId", sql.UniqueIdentifier, user.id)
+                  .input("balance", sql.Decimal(18, 2), balance)
+                  .input("balanceDate", sql.DateTimeOffset, balanceDate)
+                  .query(`
+                    UPDATE Accounts
+                    SET accountBalance = @balance,
+                        balanceDate = @balanceDate,
+                        updatedAt = SYSUTCDATETIME()
+                    WHERE id = @accountId AND userID = @userId
+                  `);
+
+                accountsUpdated++;
+                console.log(`[SYNC] User ${user.id}: Updated Debit account ${account.id} balance to ${balance}`);
+              }
+
+              // For any of the user's accounts that have account type 'Credit', get the transactions from the SimpleFin response of those accounts
+              // and add any of those transactions that dont exist into the Azure DB
+              if (dbAccount.accountType === 'Credit') {
+                // Get all pending transaction IDs from SimpleFIN for this account
+                const simpleFinTxnIds = account.transactions 
+                  ? account.transactions.map(txn => txn.id) 
+                  : [];
+
+                // Check for orphaned pending transactions in our DB that don't exist in SimpleFIN response
+                // These are transactions that were pending but SimpleFIN changed their ID when they posted
+                const orphanedTxns = await new sql.Request(transaction)
+                  .input("accountId", sql.VarChar(100), account.id)
+                  .query(`
+                    SELECT id 
+                    FROM Transactions 
+                    WHERE accountID = @accountId 
+                      AND pending = 1
+                  `);
+
+                // Remove pending transactions that no longer exist in SimpleFIN
+                for (const dbTxn of orphanedTxns.recordset) {
+                  if (!simpleFinTxnIds.includes(dbTxn.id)) {
+                    await new sql.Request(transaction)
+                      .input("txnId", sql.VarChar(100), dbTxn.id)
+                      .query(`
+                        DELETE FROM Transactions WHERE id = @txnId
+                      `);
+                    
+                    pendingTransactionsRemoved++;
+                    console.log(`[SYNC] User ${user.id}: Removed orphaned pending transaction ${dbTxn.id} from account ${account.id}`);
+                  }
+                }
+
+                // Now insert/update transactions from SimpleFIN
+                if (account.transactions) {
+                  for (const txn of account.transactions) {
+                    // Check if transaction already exists
+                    const existingTxn = await new sql.Request(transaction)
+                      .input("txnId", sql.VarChar(100), txn.id)
+                      .query(`
+                        SELECT id, pending FROM Transactions WHERE id = @txnId
+                      `);
+
+                    const txnDate = txn.posted
+                      ? new Date(txn.posted * 1000)
+                      : new Date();
+
+                    if (existingTxn.recordset.length === 0) {
+                      // Transaction doesn't exist, insert it
+                      await new sql.Request(transaction)
+                        .input("id", sql.VarChar(100), txn.id)
+                        .input("accountId", sql.VarChar(100), account.id)
+                        .input("userID", sql.UniqueIdentifier, user.id)
+                        .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
+                        .input("name", sql.NVarChar(500), txn.description || 'Unknown')
+                        .input("transactionDate", sql.DateTimeOffset, txnDate)
+                        .input("pending", sql.Bit, txn.pending || false)
+                        .query(`
+                          INSERT INTO Transactions (
+                            id, accountID, userID, amount, name, 
+                            transactionDate, pending, createdAt, updatedAt
+                          )
+                          VALUES (
+                            @id, @accountId, @userID, @amount, @name,
+                            @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
+                          )
+                        `);
+
+                      transactionsInserted++;
+                    } else {
+                      // Transaction exists - update if pending status changed
+                      const existingPending = existingTxn.recordset[0].pending;
+                      const newPending = txn.pending || false;
+
+                      if (existingPending !== newPending) {
+                        await new sql.Request(transaction)
+                          .input("txnId", sql.VarChar(100), txn.id)
+                          .input("pending", sql.Bit, newPending)
+                          .input("transactionDate", sql.DateTimeOffset, txnDate)
+                          .query(`
+                            UPDATE Transactions
+                            SET pending = @pending,
+                                transactionDate = @transactionDate,
+                                updatedAt = SYSUTCDATETIME()
+                            WHERE id = @txnId
+                          `);
+                        
+                        console.log(`[SYNC] User ${user.id}: Updated transaction ${txn.id} pending status from ${existingPending} to ${newPending}`);
+                      }
+                    }
+                  }
+                }
+
+                console.log(`[SYNC] User ${user.id}: Processed ${account.transactions?.length || 0} transactions for Credit account ${account.id}`);
+              }
+            }
+
+            await transaction.commit();
+            return { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved };
+
+          } catch (dbErr) {
+            await transaction.rollback();
+            throw dbErr;
+          }
+        });
+
+        // Keep track of user's processed, and totalAccountsUpdated/totalTransactionsInserted
+        usersProcessed++;
+        totalAccountsUpdated += accountsUpdated;
+        totalTransactionsInserted += transactionsInserted;
+
+        console.log(`[SYNC] User ${user.id}: Complete - ${accountsUpdated} accounts updated, ${accountsAdded} accounts added, ${transactionsInserted} transactions inserted, ${pendingTransactionsRemoved} pending transactions removed`);
+
+      } catch (userErr) {
+        console.error(`[SYNC] Error processing user ${user.id}:`, userErr.message);
+        errors.push({
+          userId: user.id,
+          error: userErr.message
+        });
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Sync complete: ${usersProcessed} users processed, ${totalAccountsUpdated} accounts updated, ${totalTransactionsInserted} transactions inserted`,
+      stats: {
+        usersProcessed,
+        totalAccountsUpdated,
+        totalTransactionsInserted,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+})
 
 // Register a new user
 app.post("/register", async (req, res, next) => {
@@ -575,6 +1206,32 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
     next(err);
   } 
 });
+
+// Gets all of the User's accounts
+app.get("/accounts", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by authRequired
+
+    const accounts = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT id, name, accountBalance, accountType, balanceDate, createdAt, updatedAt
+          FROM Accounts
+          WHERE userID = @userID
+          ORDER BY createdAt DESC
+        `);
+      return result.recordset;
+    });
+
+    res.json({
+      success: true,
+      accounts
+    });
+  } catch (err) {
+    next(err);
+  }
+})
 
 /*****************************************
  * Global Error Handling
