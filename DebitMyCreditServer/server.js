@@ -106,7 +106,7 @@ function getUnixTime30DaysAgo() {
 // Wrapper for any SQL Query to the DB to handle sleeping DB issues
 async function queryWithRetry(callback, options = {}) {
   const maxRetries = options.maxRetries || 3;
-  const retryDelay = options.retryDelay || 5000; // 5 seconds (balanced for DB wake-up time)
+  const retryDelay = options.retryDelay || 6000; // 5 seconds (balanced for DB wake-up time)
   const trackAttempts = options.trackAttempts || false; // New option to return attempt count
   
   let lastError;
@@ -118,13 +118,14 @@ async function queryWithRetry(callback, options = {}) {
       // Try to connect to the database
       const pool = await sql.connect(azureConfig);
       
-      console.log(`[DB] Connected successfully on attempt ${attempt}`);
-      
       // Execute the callback with the connected pool
       const result = await callback(pool);
       
+      console.log(`[DB] Connected successfully on attempt ${attempt}`);
+
       // If tracking attempts, wrap result with metadata
       if (trackAttempts) {
+
         return {
           success: true,
           data: result,
@@ -229,24 +230,32 @@ async function syncSimpleFinDataForUser(user) {
 
         // If account doesn't exist in our DB, add it with accountType 'N/A'
         if (accountQuery.recordset.length === 0) {
+          // Convert the format of balance-date
           const balanceDate = account["balance-date"]
             ? new Date(account["balance-date"] * 1000)
             : null;
 
+          // Extract the account number from the name
+          const match = account.name.match(/\((\d+)\)/);
+          const accountNumber = match ? match[1] : null;              
+          const cleanedName = account.name.replace(/\s*\(\d+\)/, "").trim();
+
           await new sql.Request(transaction)
             .input("id", sql.VarChar(100), account.id)
             .input("userID", sql.UniqueIdentifier, user.id)
-            .input("name", sql.NVarChar(255), account.name)
+            .input("name", sql.NVarChar(255), cleanedName)
+            .input("bank", sql.NVarChar(255), account.org?.name || null)
+            .input("accountNumber", sql.Char(6), accountNumber)
             .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .input("accountType", sql.VarChar(50), 'N/A')
             .query(`
               INSERT INTO Accounts (
-                id, userID, name, accountBalance, balanceDate,
+                id, userID, name, bank, accountNumber, accountBalance, balanceDate,
                 accountType, createdAt, updatedAt
               )
               VALUES (
-                @id, @userID, @name, @accountBalance, @balanceDate,
+                @id, @userID, @name, @bank, @accountNumber, @accountBalance, @balanceDate,
                 @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
@@ -894,30 +903,38 @@ app.post("/connect-simplefin", async (req, res, next) => {
             ? new Date(account["balance-date"] * 1000)
             : null;
 
+          // Extract the account number from the name
+          const match = account.name.match(/\((\d+)\)/);
+          const accountNumber = match ? match[1] : null;              
+          const cleanedName = account.name.replace(/\s*\(\d+\)/, "").trim();
+
           await new sql.Request(transaction)
             .input("id", sql.VarChar(100), account.id)
             .input("userID", sql.UniqueIdentifier, userID)
-            .input("name", sql.NVarChar(255), account.name)
+            .input("name", sql.NVarChar(255), cleanedName)
+            .input("bank", sql.NVarChar(255), account.org?.name || null)
+            .input("accountNumber", sql.Char(6), accountNumber)
             .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .query(`
               -- Update the account if it already exists
               UPDATE Accounts
-              SET name = @name,
+              SET bank = @bank,
+                  accountNumber = @accountNumber,
                   accountBalance = @accountBalance,
                   balanceDate = @balanceDate,
                   updatedAt = SYSUTCDATETIME()
               WHERE id = @id AND userID = @userID;
 
-              -- If the account did no exist, insert new account with type 'N/A'
+              -- If the account did not exist, insert new account with type 'N/A'
               IF @@ROWCOUNT = 0
               BEGIN
                 INSERT INTO Accounts (
-                  id, userID, name, accountBalance, balanceDate,
+                  id, userID, name, bank, accountNumber, accountBalance, balanceDate,
                   accountType, createdAt, updatedAt
                 )
                 VALUES (
-                  @id, @userID, @name, @accountBalance, @balanceDate,
+                  @id, @userID, @name, @bank, @accountNumber, @accountBalance, @balanceDate,
                   'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
                 )
               END
@@ -929,7 +946,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
         // After all updates, fetch all accounts for this user
         const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
-            .query(`SELECT id, name, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+            .query(`SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
 
         // Return the accounts data
         return result.recordset;
@@ -1060,7 +1077,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const accountsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, accountBalance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1139,7 +1156,7 @@ app.get("/accounts", authRequired, async (req, res, next) => {
       const result = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, accountBalance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1150,6 +1167,59 @@ app.get("/accounts", authRequired, async (req, res, next) => {
     res.json({
       success: true,
       accounts
+    });
+  } catch (err) {
+    next(err);
+  }
+})
+
+app.post("/update/accounts", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const clientAccounts = req.body.accounts;
+
+    if (!Array.isArray(clientAccounts) || clientAccounts.length === 0) {
+      return res.status(400).json({ success: false, message: "accounts array is required" });
+    }
+
+    const stats = await queryWithRetry(async (pool) => {
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
+
+      let accountsUpdated = 0;
+
+      try {
+        for (const account of clientAccounts) {
+          await new sql.Request(transaction)
+            .input("accountId", sql.VarChar(100), account.id)
+            .input("userId", sql.UniqueIdentifier, userID)
+            .input("name", sql.NVarChar(255), account.name)
+            .input("accountType", sql.VarChar(50), account.accountType)
+            .query(`
+              UPDATE Accounts
+              SET name = @name,
+                  accountType = @accountType,
+                  updatedAt = SYSUTCDATETIME()
+              WHERE id = @accountId AND userID = @userId
+            `);
+
+          accountsUpdated++;
+        }
+
+        await transaction.commit();
+
+        return accountsUpdated
+
+      } catch (dbErr) {
+        await transaction.rollback();
+        throw dbErr;
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: "Accounts updated successfully",
+      accountsUpdated: stats
     });
   } catch (err) {
     next(err);
