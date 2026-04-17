@@ -1173,6 +1173,54 @@ app.get("/accounts", authRequired, async (req, res, next) => {
   }
 })
 
+app.post("/update/user", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { newEmail, newPassword } = req.body;
+
+    // Check that info was provided to update
+    if (!newEmail && !newPassword) {
+      return res.status(400).json({ 
+        success: false,
+        message: "No user account info to update" 
+      });
+    }
+
+    // If a password was provided, hash it before sending to DB
+    let hashedPassword = null;
+    if (newPassword) {
+      hashedPassword = await hashPassword(newPassword);
+    }
+
+    // Build SET clause to only set the info that was provided
+    const setClauses = ["updatedAt = SYSUTCDATETIME()"];
+    if (newEmail) setClauses.push("email = @email");
+    if (hashedPassword) setClauses.push("passwordHash = @passwordHash");
+
+    const stats = await queryWithRetry(async (pool) => {
+      const request = pool.request()
+        .input("userID", sql.UniqueIdentifier, userID);
+      if (newEmail) request.input("email", sql.VarChar(255), newEmail);
+      if (hashedPassword) request.input("passwordHash", sql.VarChar(255), hashedPassword);
+      const result = await request.query(`
+          UPDATE Users
+          SET ${setClauses.join(", ")}
+          OUTPUT INSERTED.updatedAt
+          WHERE id = @userID
+        `);
+      return result.recordset;
+    });
+
+    res.json({
+      success: true,
+      message: "User account info updated successfully",
+      updatedAt: stats[0]?.updatedAt ?? null
+    });
+  } catch (err) {
+    next(err);
+  }
+})
+
 app.post("/update/accounts", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;

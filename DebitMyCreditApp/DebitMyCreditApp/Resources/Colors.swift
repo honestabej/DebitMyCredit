@@ -1,6 +1,5 @@
 import SwiftUI
 
-// SwiftUI Color Hex Initializer (cross-platform)
 extension Color {
     init(hex: String, alpha: Double = 1.0) {
         var hexClean = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15,30 +14,16 @@ extension Color {
 
         self = Color(red: r, green: g, blue: b, opacity: alpha)
     }
-}
-
-// App Colors (as SwiftUI Colors)
-struct AppColors {
-    static let lightGrey = Color(hex: "#F8F8F8")
-    static let grey = Color(hex: "#EAEAEA")
-    static let cancelRed = Color(hex: "#FF7C7C")
-    static let red = Color(hex: "#FF3B30")
-    static let orange = Color(hex: "#FF9500")
-    static let purple = Color(hex: "#8E44AD")
-    static let green = Color(hex: "#40C174")
-    static let yellow = Color(hex: "#F4B552")
-}
-
-// SwiftUI Color equivalents (convenience statics)
-extension Color {
-    static let appLightGrey = AppColors.lightGrey
-    static let appGrey = AppColors.grey
-    static let appCancelRed = AppColors.cancelRed
-    static let appRed = AppColors.red
-    static let appOrange = AppColors.orange
-    static let appPurple = AppColors.purple
-    static let appGreen = AppColors.green
-    static let appYellow = AppColors.yellow
+    
+    // App Colors
+    static let appLightGrey = Color(hex: "#F8F8F8")
+    static let appGrey = Color(hex: "#EAEAEA")
+    static let appCancelRed = Color(hex: "#FF7C7C")
+    static let appRed = Color(hex: "#FF3B30")
+    static let appOrange = Color(hex: "#FF9500")
+    static let appPurple = Color(hex: "#8E44AD")
+    static let appGreen = Color(hex: "#40C174")
+    static let appYellow = Color(hex: "#F4B552")
 }
 
 // Default background gradients

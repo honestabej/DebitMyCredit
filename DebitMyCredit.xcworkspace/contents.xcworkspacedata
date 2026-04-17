@@ -91,9 +91,21 @@
             <FileRef
                location = "group:TransfersView.swift">
             </FileRef>
+            <FileRef
+               location = "group:SYNC_STRATEGY.md">
+            </FileRef>
+            <FileRef
+               location = "group:IMPLEMENTATION_EXAMPLES.md">
+            </FileRef>
+            <FileRef
+               location = "group:SYNC_SUMMARY.md">
+            </FileRef>
          </Group>
          <FileRef
             location = "group:DebitMyCreditApp.swift">
+         </FileRef>
+         <FileRef
+            location = "group:KeychainHelper.swift">
          </FileRef>
       </Group>
       <FileRef

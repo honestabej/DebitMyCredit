@@ -10,9 +10,9 @@ struct RootView: View {
             MainTabView()
         } else {
             if showRegister {
-                RegisterView()
+                RegisterView(showRegister: $showRegister)
             } else {
-                LoginView()
+                LoginView(showRegister: $showRegister)
             }
         }
     }
