@@ -41,7 +41,7 @@ struct AccountsView: View {
                     HStack {
                         Spacer()
                         Button(action: {
-                            Task { await authManager.triggerSync() }
+                            Task { await authManager.refreshData() }
                         }) {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 18, weight: .semibold))

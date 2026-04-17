@@ -1015,7 +1015,8 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
 });
 
 // Trigger background sync for the authenticated user
-app.post("/user/sync", authRequired, async (req, res, next) => {
+// Responds immediately and runs the SimpleFIN sync in the background (fire and forget)
+app.post("/user/sync-bg", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
 
@@ -1035,7 +1036,7 @@ app.post("/user/sync", authRequired, async (req, res, next) => {
           const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
             .query(`
-              SELECT 
+              SELECT
                 id,
                 simpleFinAccessURLData,
                 simpleFinAccessURLIV,
@@ -1060,6 +1061,53 @@ app.post("/user/sync", authRequired, async (req, res, next) => {
       } catch (err) {
         console.error(`[SYNC] Background sync failed for user ${userID}:`, err.message);
       }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Awaits the SimpleFIN sync and responds only when complete
+app.post("/user/sync", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+
+    console.log(`[SYNC] Starting sync for user ${userID}`);
+
+    // Get user's access URL
+    const user = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT
+            id,
+            simpleFinAccessURLData,
+            simpleFinAccessURLIV,
+            simpleFinAccessURLTag
+          FROM Users
+          WHERE id = @userID
+            AND simpleFinAccessURLData IS NOT NULL
+            AND simpleFinAccessURLIV IS NOT NULL
+            AND simpleFinAccessURLTag IS NOT NULL
+        `);
+      return result.recordset[0];
+    });
+
+    if (!user) {
+      return res.json({
+        success: false,
+        message: "No SimpleFin connection found for user"
+      });
+    }
+
+    // Await the sync before responding
+    const stats = await syncSimpleFinDataForUser(user);
+
+    res.json({
+      success: true,
+      message: "Sync complete",
+      stats
     });
 
   } catch (err) {

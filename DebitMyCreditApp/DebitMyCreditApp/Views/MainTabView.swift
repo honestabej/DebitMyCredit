@@ -56,12 +56,14 @@ struct MainTabView: View {
         .tint(.appRed)
         .overlay(alignment: .top) {
             // Syncing overlay to display acorss all pages whenever a background sync is happening
-            if authManager.isLoadingUserData {
+            if authManager.isRefreshing || authManager.isSyncingSimpleFIN || authManager.isLoadingUserData {
+                let syncText: String = authManager.isSyncingSimpleFIN ? "Syncing SimpleFIN..." :
+                                       authManager.isLoadingUserData ? "Loading Data..." : "Refreshing..."
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
                         .tint(.white)
-                    Text("Syncing...")
+                    Text(syncText)
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundColor(.white)
@@ -96,7 +98,7 @@ struct MainTabView: View {
                 if timeInBackground > 300 { // 5 minutes
                     print("🔄 Refreshing data after extended background time")
                     Task {
-                        await authManager.loadUserData()
+                        await authManager.fetchAndLoadUserData()
                     }
                 }
             }

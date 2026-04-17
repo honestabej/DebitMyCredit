@@ -220,7 +220,7 @@ struct ManageAccountsView: View {
         
         Task {
             do {
-                await authManager.triggerSync()
+                await authManager.refreshData()
                 
                 await MainActor.run {
                     isSyncing = false

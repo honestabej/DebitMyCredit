@@ -263,7 +263,7 @@ class APIService {
     }
 
     // Trigger background sync for authenticated user
-    func triggerSync(token: String) async throws -> APIModels.SyncResponse {
+    func syncSimpleFIN(token: String) async throws -> APIModels.SyncResponse {
         return try await makeRequest(endpoint: "/user/sync", method: .post, token: token)
     }
 }
