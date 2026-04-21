@@ -266,7 +266,7 @@ struct ManageAccountRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // Display corresponding Bank Logo
-            Image(getBankLogoName())
+            Image(getBankCircleLogo(bankName: account.bank?.lowercased() ?? ""))
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 40, height: 40)
@@ -350,26 +350,6 @@ struct ManageAccountRow: View {
                     .controlSize(.mini)
                 }
             }
-        }
-    }
-
-    // Display the corresponding logo from assets based on the bank's name
-    private func getBankLogoName() -> String {
-        guard let bankName = account.bank?.lowercased() else {
-            return "Default-Circle-Logo"
-        }
-
-        if bankName.contains("chase") {
-            return "Chase-Circle-Logo"
-        } else if bankName.contains("wells fargo") || bankName.contains("wellsfargo") {
-            return "WF-Circle-Logo"
-        } else if bankName.contains("discover") {
-            return "Discover-Circle-Logo"
-        } else if bankName.contains("apple") {
-            return "Apple-Circle-Logo"
-        // TODO: Add more banks
-        } else {
-            return "Default-Circle-Logo"
         }
     }
 

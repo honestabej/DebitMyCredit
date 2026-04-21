@@ -11,8 +11,8 @@
         <attribute name="id" optional="YES" attributeType="String"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <relationship name="allocations" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TransactionAllocation" inverseName="account" inverseEntity="TransactionAllocation"/>
-        <relationship name="transactions" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Transaction" inverseName="account" inverseEntity="Transaction"/>
+        <relationship name="allocations" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TransactionAllocation" inverseName="account" inverseEntity="TransactionAllocation"/>
+        <relationship name="transactions" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Transaction" inverseName="account" inverseEntity="Transaction"/>
         <relationship name="user" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="accounts" inverseEntity="User"/>
     </entity>
     <entity name="Transaction" representedClassName="Transaction" syncable="YES" codeGenerationType="class">
@@ -25,7 +25,7 @@
         <attribute name="transactionDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="account" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Account" inverseName="transactions" inverseEntity="Account"/>
-        <relationship name="allocations" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TransactionAllocation" inverseName="transaction" inverseEntity="TransactionAllocation"/>
+        <relationship name="allocations" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TransactionAllocation" inverseName="transaction" inverseEntity="TransactionAllocation"/>
         <relationship name="transferGroup" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TransferGroup" inverseName="transactions" inverseEntity="TransferGroup"/>
         <relationship name="user" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="transactions" inverseEntity="User"/>
     </entity>
@@ -39,7 +39,7 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <relationship name="transactions" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Transaction" inverseName="transferGroup" inverseEntity="Transaction"/>
+        <relationship name="transactions" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Transaction" inverseName="transferGroup" inverseEntity="Transaction"/>
         <relationship name="user" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="transferGroups" inverseEntity="User"/>
     </entity>
     <entity name="User" representedClassName="User" syncable="YES" codeGenerationType="class">
@@ -48,8 +48,8 @@
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="simpleFinCredentialsSet" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <relationship name="accounts" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Account" inverseName="user" inverseEntity="Account"/>
-        <relationship name="transactions" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Transaction" inverseName="user" inverseEntity="Transaction"/>
-        <relationship name="transferGroups" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="TransferGroup" inverseName="user" inverseEntity="TransferGroup"/>
+        <relationship name="accounts" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Account" inverseName="user" inverseEntity="Account"/>
+        <relationship name="transactions" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Transaction" inverseName="user" inverseEntity="Transaction"/>
+        <relationship name="transferGroups" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TransferGroup" inverseName="user" inverseEntity="TransferGroup"/>
     </entity>
 </model>

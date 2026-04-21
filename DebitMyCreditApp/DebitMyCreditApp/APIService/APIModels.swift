@@ -66,6 +66,7 @@ class APIModels {
             let accountID: String
             let amount: Double
             let name: String
+            let notes: String?
             let transactionDate: FlexibleDate
             let pending: Bool
             let createdAt: FlexibleDate?

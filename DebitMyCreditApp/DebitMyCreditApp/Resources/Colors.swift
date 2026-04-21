@@ -24,6 +24,12 @@ extension Color {
     static let appPurple = Color(hex: "#8E44AD")
     static let appGreen = Color(hex: "#40C174")
     static let appYellow = Color(hex: "#F4B552")
+    
+    // Bank Colors
+    static let WellsFargoRed = Color(hex: "#B31E30")
+    static let ChaseBlue = Color(hex: "#005EB8")
+    static let DiscoverOrange = Color(hex: "#FB8C13")
+    static let AppleGrey = Color(hex: "A2AAAD")
 }
 
 // Default background gradients
@@ -46,5 +52,16 @@ struct AppGradients {
         ]),
         startPoint: .leading,
         endPoint: .trailing
+    )
+    
+    static let appleCardGradient = LinearGradient(
+        gradient: Gradient(stops: [
+            .init(color: Color(hex: "F2F2F2"), location: 0.0),
+            .init(color: Color(hex: "E8E8E8"), location: 0.3),
+            .init(color: Color(hex: "F5F5F0"), location: 0.6),
+            .init(color: Color(hex: "DCDCDC"), location: 1.0)
+        ]),
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
     )
 }

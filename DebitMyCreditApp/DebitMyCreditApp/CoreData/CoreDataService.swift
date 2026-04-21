@@ -108,7 +108,7 @@ final class CoreDataService {
                 localAccount.accountBalance = NSDecimalNumber(value: serverAccount.accountBalance)
                 localAccount.accountType = serverAccount.accountType
                 
-                // ✅ IMPORTANT: Set the user relationship!
+                // Set the user relationship
                 if let userEntity = userEntity {
                     localAccount.user = userEntity
 //                    print("   - \(isNewAccount ? "Creating" : "Updating") account: \(serverAccount.name) (user: \(userEntity.email ?? "unknown"))")
@@ -138,7 +138,7 @@ final class CoreDataService {
                 let localTxn = (try? context.fetch(txnFetch).first) ?? Transaction(context: context)
                 localTxn.id = serverTxn.id
                 
-                // ✅ Set the user relationship
+                // Set the user relationship
                 if let userEntity = userEntity {
                     localTxn.user = userEntity
                 }
@@ -154,6 +154,7 @@ final class CoreDataService {
                 
                 localTxn.amount = NSDecimalNumber(value: serverTxn.amount)
                 localTxn.name = serverTxn.name
+                localTxn.notes = serverTxn.notes ?? ""
                 localTxn.pending = serverTxn.pending
                 
                 // Parse dates from FlexibleDate

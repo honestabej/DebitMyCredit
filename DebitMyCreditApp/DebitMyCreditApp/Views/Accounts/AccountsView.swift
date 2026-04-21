@@ -2,7 +2,6 @@ import SwiftUI
 import CoreData
 
 struct AccountsView: View {
-    
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -37,18 +36,21 @@ struct AccountsView: View {
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.white)
-
-                    HStack {
-                        Spacer()
-                        Button(action: {
-                            Task { await authManager.refreshData() }
-                        }) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
+                    
+                    // Dont show refresh button if a refresh is currently taking place
+                    if (!authManager.isRefreshing || !authManager.isSyncingSimpleFIN || !authManager.isLoadingUserData) {
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                Task { await authManager.refreshData() }
+                            }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+                            .padding(.top)
+                            .padding(.trailing, 20)
                         }
-                        .padding(.top)
-                        .padding(.trailing, 20)
                     }
                 }
                 
@@ -68,8 +70,8 @@ struct AccountsView: View {
             LazyVStack(spacing: 0) {
                 ForEach(accounts) { account in
                     AccountRow(account: account)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
 
                     if account != accounts.last {
                         Divider()
@@ -84,31 +86,118 @@ struct AccountsView: View {
 
 struct AccountRow: View {
     @ObservedObject var account: Account
+    @Environment(\.managedObjectContext) private var viewContext
+    @State private var showAccountDetail = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Card Image
-            ZStack () {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(Color.appPurple))
-                    .frame(width: 100, height: 55)
+        let acctBalDate = account.balanceDate?.formatted(Date.FormatStyle().month(.defaultDigits).day().hour().minute()) ?? "Unknown"
+
+        Button(action: { showAccountDetail = true }) {
+        HStack(alignment: .top, spacing: 10) {
+            
+            VStack() {
+                // Card Image
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(getBankColor(bankName: account.bank?.lowercased() ?? ""))
+                        .frame(width: 110, height: 69)
+                    
+                    // Bank logo — top left
+                    VStack {
+                        HStack {
+                            Image(getBankTextLogo(bankName: account.bank?.lowercased() ?? ""))
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 13)
+                                .padding([.top, .leading], 5)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .frame(width: 100, height: 63)
+                    
+                    // Last 4 digits — bottom right
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            if let acctNum = account.accountNumber {
+                                Text("...\(acctNum)")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.bottom, 5)
+                                    .padding(.trailing, 8)
+                            }
+                        }
+                    }
+                    .frame(width: 110, height: 69)
+                }
                 
-                Text("Test")
+                // Last updated indication
+                Text("\(acctBalDate)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
             }
             
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(account.name ?? "")
-                Text(account.balanceDate?.formatted(Date.FormatStyle().month(.defaultDigits).day().hour().minute()) ?? "")
-                Text(account.accountBalance.map { balance in
-                    balance.decimalValue as Decimal
-                }.map {
-                    $0.formatted(.currency(code: "USD"))
-                } ?? "")
+                    .fontWeight(.heavy)
+                    .font(.system(size: 19))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                
+                
+                HStack() {
+                    VStack() {
+                        Text(account.accountBalance.map { balance in
+                            balance.decimalValue as Decimal
+                        }.map {
+                            $0.formatted(.currency(code: "USD"))
+                        } ?? "")
+                            .fontWeight(.semibold)
+                        Text("Balance")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.leading, 20)
+                    
+                    Spacer()
+                    
+                    VStack() {
+                        Text(account.accountBalance.map { balance in
+                            balance.decimalValue as Decimal
+                        }.map {
+                            $0.formatted(.currency(code: "USD"))
+                        } ?? "")
+                            .italic()
+                            .fontWeight(.semibold)
+                        
+                        Text("Active")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.gray)
+                            .italic()
+                    }
+                    .padding(.trailing, 20)
+                }
+                .padding(.top, 3)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showAccountDetail) {
+            AccountView(account: account)
+                .environment(\.managedObjectContext, viewContext)
+                .presentationDragIndicator(.visible)
         }
     }
 }
+
+
 
 // View for each row
 #Preview {
@@ -120,6 +209,7 @@ struct AccountRow: View {
     account1.name = "Chase Checking"
     account1.bank = "Chase"
     account1.accountType = "Debit"
+    account1.accountNumber = "1234"
     account1.accountBalance = NSDecimalNumber(value: 1234.56)
     account1.balanceDate = Date()
 

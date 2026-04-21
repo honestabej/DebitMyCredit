@@ -289,82 +289,81 @@ async function syncSimpleFinDataForUser(user) {
           accountsUpdated++;
         }
 
-        // For Credit accounts, process transactions
-        if (dbAccount.accountType === 'Credit') {
-          const simpleFinTxnIds = account.transactions 
-            ? account.transactions.map(txn => txn.id) 
-            : [];
+        // Insert transactions
+        const simpleFinTxnIds = account.transactions 
+          ? account.transactions.map(txn => txn.id) 
+          : [];
 
-          // Remove orphaned pending transactions
-          const orphanedTxns = await new sql.Request(transaction)
-            .input("accountId", sql.VarChar(100), account.id)
-            .query(`
-              SELECT id 
-              FROM Transactions 
-              WHERE accountID = @accountId AND pending = 1
-            `);
+        // Remove orphaned pending transactions
+        const orphanedTxns = await new sql.Request(transaction)
+          .input("accountId", sql.VarChar(100), account.id)
+          .query(`
+            SELECT id 
+            FROM Transactions 
+            WHERE accountID = @accountId AND pending = 1
+          `);
 
-          for (const dbTxn of orphanedTxns.recordset) {
-            if (!simpleFinTxnIds.includes(dbTxn.id)) {
-              await new sql.Request(transaction)
-                .input("txnId", sql.VarChar(100), dbTxn.id)
-                .query(`DELETE FROM Transactions WHERE id = @txnId`);
-              
-              pendingTransactionsRemoved++;
-            }
+        for (const dbTxn of orphanedTxns.recordset) {
+          if (!simpleFinTxnIds.includes(dbTxn.id)) {
+            await new sql.Request(transaction)
+              .input("txnId", sql.VarChar(100), dbTxn.id)
+              .query(`DELETE FROM Transactions WHERE id = @txnId`);
+            
+            pendingTransactionsRemoved++;
           }
+        }
 
-          // Insert/update transactions
-          if (account.transactions) {
-            for (const txn of account.transactions) {
-              const existingTxn = await new sql.Request(transaction)
-                .input("txnId", sql.VarChar(100), txn.id)
-                .query(`SELECT id, pending FROM Transactions WHERE id = @txnId`);
+        // Insert/update transactions
+        if (account.transactions) {
+          for (const txn of account.transactions) {
+            const existingTxn = await new sql.Request(transaction)
+              .input("txnId", sql.VarChar(100), txn.id)
+              .query(`SELECT id, pending FROM Transactions WHERE id = @txnId`);
 
-              const txnDate = txn.posted
-                ? new Date(txn.posted * 1000)
-                : new Date();
+            const txnDate = txn.posted
+              ? new Date(txn.posted * 1000)
+              : new Date();
 
-              if (existingTxn.recordset.length === 0) {
-                // Insert new transaction
+            if (existingTxn.recordset.length === 0) {
+              // Insert new transaction
+              await new sql.Request(transaction)
+                .input("id", sql.VarChar(100), txn.id)
+                .input("accountId", sql.VarChar(100), account.id)
+                .input("userID", sql.UniqueIdentifier, user.id)
+                .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
+                .input("name", sql.NVarChar(500), txn.payee || 'Unknown')
+                .input("notes", sql.NVarChar(500), txn.description || '')
+                .input("transactionDate", sql.DateTimeOffset, txnDate)
+                .input("pending", sql.Bit, txn.pending || false)
+                .query(`
+                  INSERT INTO Transactions (
+                    id, accountID, userID, amount, name, notes,
+                    transactionDate, pending, createdAt, updatedAt
+                  )
+                  VALUES (
+                    @id, @accountId, @userID, @amount, @name, @notes,
+                    @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
+                  )
+                `);
+
+              transactionsInserted++;
+            } else {
+              // Update if pending status changed
+              const existingPending = existingTxn.recordset[0].pending;
+              const newPending = txn.pending || false;
+
+              if (existingPending !== newPending) {
                 await new sql.Request(transaction)
-                  .input("id", sql.VarChar(100), txn.id)
-                  .input("accountId", sql.VarChar(100), account.id)
-                  .input("userID", sql.UniqueIdentifier, user.id)
-                  .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
-                  .input("name", sql.NVarChar(500), txn.description || 'Unknown')
+                  .input("txnId", sql.VarChar(100), txn.id)
+                  .input("pending", sql.Bit, newPending)
                   .input("transactionDate", sql.DateTimeOffset, txnDate)
-                  .input("pending", sql.Bit, txn.pending || false)
                   .query(`
-                    INSERT INTO Transactions (
-                      id, accountID, userID, amount, name, 
-                      transactionDate, pending, createdAt, updatedAt
-                    )
-                    VALUES (
-                      @id, @accountId, @userID, @amount, @name,
-                      @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
-                    )
+                    UPDATE Transactions
+                    SET pending = @pending,
+                        transactionDate = @transactionDate,
+                        updatedAt = SYSUTCDATETIME()
+                    WHERE id = @txnId
                   `);
-
-                transactionsInserted++;
-              } else {
-                // Update if pending status changed
-                const existingPending = existingTxn.recordset[0].pending;
-                const newPending = txn.pending || false;
-
-                if (existingPending !== newPending) {
-                  await new sql.Request(transaction)
-                    .input("txnId", sql.VarChar(100), txn.id)
-                    .input("pending", sql.Bit, newPending)
-                    .input("transactionDate", sql.DateTimeOffset, txnDate)
-                    .query(`
-                      UPDATE Transactions
-                      SET pending = @pending,
-                          transactionDate = @transactionDate,
-                          updatedAt = SYSUTCDATETIME()
-                      WHERE id = @txnId
-                    `);
-                }
               }
             }
           }
@@ -1135,12 +1134,13 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const transactionsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT 
-            t.id, 
-            t.accountID, 
-            t.amount, 
-            t.name, 
-            t.transactionDate, 
+          SELECT
+            t.id,
+            t.accountID,
+            t.amount,
+            t.name,
+            t.notes,
+            t.transactionDate,
             t.pending,
             t.createdAt,
             t.updatedAt
