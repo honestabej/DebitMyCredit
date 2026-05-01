@@ -86,7 +86,7 @@ struct SettingsView: View {
                         showingManageAccountsView = true
                     } label: {
                         HStack {
-                            Text("Manage bank accounts").fontWeight(.medium).foregroundColor(.primary)
+                            Text("Manage Bank Accounts").fontWeight(.medium).foregroundColor(.primary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 14, weight: .semibold))

@@ -106,8 +106,8 @@ struct AccountView: View {
                 Spacer()
                 
                 VStack() {
-                    Text(account.accountBalance.map { balance in
-                        balance.decimalValue as Decimal
+                    Text(account.availableBalance.map { availableBalance in
+                        availableBalance.decimalValue as Decimal
                     }.map {
                         $0.formatted(.currency(code: "USD"))
                     } ?? "")
@@ -121,30 +121,11 @@ struct AccountView: View {
                 }
                 
                 Spacer()
-                
-                VStack() {
-                    Text(account.accountBalance.map { balance in
-                        balance.decimalValue as Decimal
-                    }.map {
-                        $0.formatted(.currency(code: "USD"))
-                    } ?? "")
-                        .italic()
-                        .fontWeight(.semibold)
-                        .font(.title3)
-                    
-                    Text("Active")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.gray)
-                        .italic()
-                }
-                
-                Spacer()
             }
             .padding(.top, 1)
             
             Text("Transactions: ")
-                .padding(.top, 10)
+                .padding([.top, .leading], 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .font(.system(size: 20))
                 .fontWeight(.semibold)
@@ -154,7 +135,6 @@ struct AccountView: View {
             
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
         .padding(.top, 50)
         .navigationBarTitleDisplayMode(.inline)
         .presentationDragIndicator(.visible)
@@ -167,12 +147,11 @@ struct AccountView: View {
                 if !pendingRows.isEmpty {
                     Section {
                         ForEach(Array(pendingRows.enumerated()), id: \.element.transaction.objectID) { index, row in
-                            TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount)
-                                .padding(.horizontal, 10)
+                            TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount, dbtAcct: account)
                                 .padding(.vertical, 8)
-
+                                .padding(.horizontal, 5)
                             if index < pendingRows.count - 1 {
-                                Divider().padding(.leading, 20)
+                                Divider()
                             }
                         }
                     } header: {
@@ -181,13 +160,8 @@ struct AccountView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                             .background(Color(.systemBackground))
-                    }
-
-                    if !settledRowsByDay.isEmpty {
-                        Divider()
                     }
                 }
 
@@ -195,12 +169,11 @@ struct AccountView: View {
                 ForEach(settledRowsByDay, id: \.day) { group in
                     Section {
                         ForEach(Array(group.rows.enumerated()), id: \.element.transaction.objectID) { index, row in
-                            TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount)
-                                .padding(.horizontal, 10)
+                            TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount, dbtAcct: account)
                                 .padding(.vertical, 8)
-
+                                .padding(.horizontal, 5)
                             if index < group.rows.count - 1 {
-                                Divider().padding(.leading, 20)
+                                Divider()
                             }
                         }
                     } header: {
@@ -209,158 +182,222 @@ struct AccountView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                             .background(Color(.systemBackground))
                     }
                 }
             }
+            .padding(.horizontal, 10)
         }
     }
 }
 
 struct TransactionRowView: View {
     @ObservedObject var transaction: Transaction
-    /// When non-nil, this transaction was allocated to the account with a specific amount
     var allocatedAmount: NSDecimalNumber?
+    var dbtAcct: Account
 
     var body: some View {
-        HStack() {
-            Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 30, height: 30)
-                .clipShape(Circle())
-                .frame(alignment: .leading)
-                .opacity(transaction.pending ? 0.5 : 1.0)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(transaction.name ?? "Tx")
-                    .lineLimit(2)
+        VStack(alignment: .leading, spacing: 5) {
+            // Top row containing account details and the transfer group if from a credit card
+            HStack() {
+                Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 15, height: 15)
+                    .clipShape(Circle())
+                Text(transaction.account?.name ?? "" )
+                    .font(.caption)
+                    .fontWeight(.light)
+                    .lineLimit(1)
                     .truncationMode(.tail)
-                    .font(.system(size: 17))
-                // Show source account name for allocated transactions
-                if allocatedAmount != nil, let sourceName = transaction.account?.name {
-                    Text("From: \(sourceName)")
+                if let acctNum = transaction.account?.accountNumber {
+                    Text("...\(acctNum)")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .fontWeight(.light)
+                }
+                
+                Spacer ()
+                
+                if transaction.account != dbtAcct {
+                    let tgName = transaction.transferGroup?.name ?? "--"
+                    Text("TG: \(tgName)")
+                        .font(.caption)
+                        .fontWeight(.light)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                } else if transaction.pending == false && transaction.notes != nil {
-                    Text("\(transaction.notes ?? "")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
                         .truncationMode(.tail)
                 }
             }
-
-            Spacer()
             
-            VStack(alignment: .trailing) {
-                // Show allocated amount if present, otherwise full transaction amount
-                let displayAmount = allocatedAmount ?? transaction.amount
-                Text(displayAmount.map {
-                    $0.decimalValue as Decimal
-                } .map {
-                    $0.formatted(.currency(code: "USD"))
-                } ?? "")
+            // Middle row containg the transaction name and the amount
+            HStack(spacing: 10) {
+                Text(transaction.name ?? "")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                
+                Spacer()
+                
+                VStack(alignment: .trailing) {
+                    // Show allocated amount if present, otherwise full transaction amount
+                    let displayAmount = allocatedAmount ?? transaction.amount
+                    Text(displayAmount.map {
+                        $0.decimalValue as Decimal
+                    } .map {
+                        $0.formatted(.currency(code: "USD"))
+                    } ?? "")
                     .fontWeight(.bold)
                     .font(.system(size: 15))
                     
-
-                // Show full amount if it was allocated from another account
-                if allocatedAmount != nil {
-                    Text("/ \(transaction.amount!)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    
+                    // Show full amount if it was allocated from another account
+                    if allocatedAmount != nil && allocatedAmount != transaction.amount,
+                       let fullAmount = transaction.amount {
+                        let formatted = (fullAmount.decimalValue as Decimal).formatted(.currency(code: "USD"))
+                        Text("/\(formatted)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .frame(minWidth: 90, alignment: .trailing)
             }
-            .frame(minWidth: 90, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundColor(transaction.pending ? .secondary : .primary)
+            
+            
+//            if transaction.pending == false && transaction.notes != nil {
+//                Text("\(transaction.notes ?? "")")
+//                    .font(.caption)
+//                    .foregroundColor(.secondary)
+//                    .lineLimit(2)
+//                    .truncationMode(.tail)
+//                    .padding(.leading, 39)
+//                    .padding(.trailing, 15)
+//            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundColor(transaction.pending ? .secondary : .primary)
     }
 }
 
-#Preview {
+
+
+
+
+// MARK: For preview window
+private func makeTx(id: String, name: String, amount: Double, date: Date, pending: Bool, acct: Account, context: NSManagedObjectContext) -> Transaction {
+    let txn = Transaction(context: context)
+    txn.id = id
+    txn.name = name
+    txn.amount = NSDecimalNumber(value: amount)
+    txn.transactionDate = date
+    txn.pending = pending
+    txn.account = acct
+    return txn
+}
+
+private func makePreviewAccount() -> (account: Account, context: NSManagedObjectContext) {
     let controller = PersistenceController(inMemory: true)
     let context = controller.container.viewContext
+    
+    // Create a transferGroup
+    let tg1 = TransferGroup(context: context)
+    tg1.name = "82"
 
-    // Primary account being viewed
-    let account = Account(context: context)
-    account.id = "1"
-    account.name = "Abe's Checking"
-    account.bank = "Wells Fargo"
-    account.accountType = "Debit"
-    account.accountNumber = "1234"
-    account.accountBalance = NSDecimalNumber(value: 1234.56)
-    account.balanceDate = Date()
+    // Checking Account being viewed
+    let dbtAcct = Account(context: context)
+    dbtAcct.id = "dbt-1"
+    dbtAcct.name = "Abe's Checking"
+    dbtAcct.bank = "Wells Fargo"
+    dbtAcct.accountType = "Debit"
+    dbtAcct.accountNumber = "1234"
+    dbtAcct.availableBalance = NSDecimalNumber(value: 1234.56)
+    dbtAcct.balanceDate = Date()
 
-    // Direct transactions on this account
-    let txn1 = Transaction(context: context)
-    txn1.id = "t1"
-    txn1.name = "Starbucks"
-    txn1.amount = NSDecimalNumber(value: -5.75)
-    txn1.transactionDate = Date()
-    txn1.pending = false
-    txn1.account = account
+    // Two credit accounts
+    let chaseCrdt = Account(context: context)
+    chaseCrdt.id = "cdt-1"
+    chaseCrdt.name = "Chase Sapphire Preffered"
+    chaseCrdt.bank = "Chase"
+    chaseCrdt.accountType = "Credit"
+    chaseCrdt.accountNumber = "2345"
 
-    // Same day as txn1 — should appear in the same date group
-    let txn4 = Transaction(context: context)
-    txn4.id = "t4"
-    txn4.name = "Target"
-    txn4.amount = NSDecimalNumber(value: -23.50)
-    txn4.transactionDate = Calendar.current.date(byAdding: .hour, value: -3, to: Date())
-    txn4.pending = false
-    txn4.account = account
+    let applCrdt = Account(context: context)
+    applCrdt.id = "cdt-2"
+    applCrdt.name = "Apple Card"
+    applCrdt.bank = "Apple"
+    applCrdt.accountType = "Credit"
+    applCrdt.accountNumber = "3456"
 
-    // Pending — should appear at top
-    let txn2 = Transaction(context: context)
-    txn2.id = "t2"
-    txn2.name = "Amazon"
-    txn2.amount = NSDecimalNumber(value: -42.99)
-    txn2.transactionDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    txn2.pending = true
-    txn2.account = account
+    let twoDaysPrior = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+    let threeDaysPrior = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
 
-    // Second pending transaction
-    let txn5 = Transaction(context: context)
-    txn5.id = "t5"
-    txn5.name = "Netflix"
-    txn5.amount = NSDecimalNumber(value: -15.99)
-    txn5.transactionDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    txn5.pending = true
-    txn5.account = account
+    // Transactions from the checking account
+    let txn1 = makeTx(id: "t1", name: "Starbucks", amount: -5.75, date: Date(), pending: false, acct: dbtAcct, context: context)
+    txn1.notes = "STARBUCKS CORP #79209"
+    let txn2 = makeTx(id: "t2", name: "Target", amount: -23.50, date: Date(), pending: false, acct: dbtAcct, context: context)
+    let txn3 = makeTx(id: "t3", name: "Safeway", amount: -131.58, date: Date(), pending: false, acct: dbtAcct, context: context)
+    let txn4 = makeTx(id: "t4", name: "Online Transfer", amount: -240.00, date: Date(), pending: false, acct: dbtAcct, context: context)
+    txn4.notes = "ONLINE TRANSFER ACCT 2345 TO ABRAHAM J - $240 CYCLE FOR TWO WEEKS"
+    let txn5 = makeTx(id: "t5", name: "Amazon", amount: -42.99, date: Date(), pending: true, acct: dbtAcct, context: context)
+    let txn6 = makeTx(id: "t6", name: "Target", amount: -50.38, date: Date(), pending: true, acct: dbtAcct, context: context)
+    let txn7 = makeTx(id: "t7", name: "McDonald's", amount: -26.83, date: twoDaysPrior, pending: false, acct: dbtAcct, context: context)
+    let txn8 = makeTx(id: "t8", name: "Cane's Chicken", amount: -15.48, date: threeDaysPrior, pending: false, acct: dbtAcct, context: context)
+    let txn9 = makeTx(id: "t9", name: "Black Rock Coffee Bar", amount: -7.26, date: threeDaysPrior, pending: false, acct: dbtAcct, context: context)
 
-    // A second account that is the source of an allocated transaction
-    let chaseCreditAcct = Account(context: context)
-    chaseCreditAcct.id = "2"
-    chaseCreditAcct.name = "Chase Credit"
-    chaseCreditAcct.bank = "Chase"
-    chaseCreditAcct.accountType = "Credit"
-    chaseCreditAcct.accountNumber = "5678"
-    chaseCreditAcct.accountBalance = NSDecimalNumber(value: 3000.00)
+    // Transactions from credit accounts
+    let txn10 = makeTx(id: "t10", name: "Target", amount: -81.24, date: Date(), pending: true, acct: chaseCrdt, context: context)
+    let txn11 = makeTx(id: "t11", name: "Amazon", amount: -46.10, date: twoDaysPrior, pending: false, acct: chaseCrdt, context: context)
+    let txn12 = makeTx(id: "t12", name: "Oregano's Bistro", amount: -57.23, date: twoDaysPrior, pending: false, acct: chaseCrdt, context: context)
+    txn12.transferGroup = tg1
+    let txn13 = makeTx(id: "t13", name: "Walmart", amount: -17.62, date: threeDaysPrior, pending: false, acct: chaseCrdt, context: context)
+    txn13.transferGroup = tg1
+    let txn14 = makeTx(id: "t14", name: "Life Cafe", amount: -9.60, date: Date(), pending: true, acct: applCrdt, context: context)
+    let txn15 = makeTx(id: "t15", name: "Black Rock Coffee Bar", amount: -7.26, date: threeDaysPrior, pending: false, acct: applCrdt, context: context)
+    txn15.transferGroup = tg1
 
-    // Transaction on the credit account that is partially allocated to the credit card
-    let txn3 = Transaction(context: context)
-    txn3.id = "t3"
-    txn3.name = "Chase credit tx"
-    txn3.amount = NSDecimalNumber(value: -500.00)
-    txn3.transactionDate = Calendar.current.date(byAdding: .day, value: -2, to: Date())
-    txn3.pending = false
-    txn3.account = chaseCreditAcct
+    
+    
+    // Allocating credit transactions to the checking account
+    let allo1 = TransactionAllocation(context: context)
+    allo1.transaction = txn10
+    allo1.account = dbtAcct
+    allo1.amount = txn10.amount // Full amount
 
-    // Allocation: $500 of the checking payment allocated to the credit card account
-    let allocation = TransactionAllocation(context: context)
-    allocation.transaction = txn3
-    allocation.account = account
-    allocation.amount = NSDecimalNumber(value: -500.00)
+    let allo2 = TransactionAllocation(context: context)
+    allo2.transaction = txn11
+    allo2.account = dbtAcct
+    allo2.amount = txn11.amount
+
+    let allo3 = TransactionAllocation(context: context)
+    allo3.transaction = txn12
+    allo3.account = dbtAcct
+    allo3.amount = NSDecimalNumber(value: -32.45)
+
+    let allo4 = TransactionAllocation(context: context)
+    allo4.transaction = txn13
+    allo4.account = dbtAcct
+    allo4.amount = NSDecimalNumber(value: -9.37)
+
+    let allo5 = TransactionAllocation(context: context)
+    allo5.transaction = txn14
+    allo5.account = dbtAcct
+    allo5.amount = txn14.amount
+
+    let allo6 = TransactionAllocation(context: context)
+    allo6.transaction = txn15
+    allo6.account = dbtAcct
+    allo6.amount = txn15.amount
+
+    // Suppress unused variable warnings
+    _ = (txn1, txn2, txn3, txn4, txn5, txn6, txn7, txn8, txn9, allo1, allo2, allo3, allo4, allo5, allo6)
 
     try? context.save()
+    return (dbtAcct, context)
+}
 
-    return NavigationStack {
-        AccountView(account: account)
+#Preview {
+    let (dbtAcct, context) = makePreviewAccount()
+    NavigationStack {
+        AccountView(account: dbtAcct)
     }
     .environment(\.managedObjectContext, context)
 }

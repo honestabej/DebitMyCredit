@@ -108,7 +108,8 @@ class APIModels {
         let name: String
         let bank: String
         let accountNumber: String?
-        let accountBalance: Double
+        let availableBalance: Double
+        let balance: Double
         let accountType: String?
         let balanceDate: FlexibleDate?
         let createdAt: FlexibleDate?
@@ -120,7 +121,8 @@ class APIModels {
                 "id": id,
                 "name": name,
                 "bank": bank,
-                "accountBalance": accountBalance
+                "availableBalance": availableBalance,
+                "balance": balance
             ]
             
             if let accountType = accountType {

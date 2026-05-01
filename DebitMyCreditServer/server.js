@@ -216,24 +216,25 @@ async function syncSimpleFinDataForUser(user) {
 
     try {
       for (const account of accounts) {
-        // Get the user's account from DB to check account type
-        const accountQuery = await new sql.Request(transaction)
+        // Get the user's account from DB to check if it exists
+        const existingAccountQuery = await new sql.Request(transaction)
           .input("accountId", sql.VarChar(100), account.id)
           .input("userId", sql.UniqueIdentifier, user.id)
           .query(`
-            SELECT id, accountType
+            SELECT id, balance, availableBalance
             FROM Accounts
             WHERE id = @accountId AND userID = @userId
           `);
 
-        let dbAccount;
+        // Convert the format of balance, available-balance, and balance-date
+        const availableBalance = parseFloat(account["available-balance"]) || 0;
+        const balance = parseFloat(account["balance"]) || 0;
+        const balanceDate = account["balance-date"]
+          ? new Date(account["balance-date"] * 1000)
+          : null;
 
         // If account doesn't exist in our DB, add it with accountType 'N/A'
-        if (accountQuery.recordset.length === 0) {
-          // Convert the format of balance-date
-          const balanceDate = account["balance-date"]
-            ? new Date(account["balance-date"] * 1000)
-            : null;
+        if (existingAccountQuery.recordset.length === 0) {
 
           // Extract the account number from the name
           const match = account.name.match(/\((\d+)\)/);
@@ -246,47 +247,64 @@ async function syncSimpleFinDataForUser(user) {
             .input("name", sql.NVarChar(255), cleanedName)
             .input("bank", sql.NVarChar(255), account.org?.name || null)
             .input("accountNumber", sql.Char(6), accountNumber)
-            .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+            .input("availableBalance", sql.Decimal(18, 2), availableBalance)
+            .input("balance", sql.Decimal(18, 2), balance)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .input("accountType", sql.VarChar(50), 'N/A')
             .query(`
               INSERT INTO Accounts (
-                id, userID, name, bank, accountNumber, accountBalance, balanceDate,
-                accountType, createdAt, updatedAt
+                id, userID, name, bank, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt
               )
               VALUES (
-                @id, @userID, @name, @bank, @accountNumber, @accountBalance, @balanceDate,
-                @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
+                @id, @userID, @name, @bank, @accountNumber, @availableBalance, @balance, @balanceDate, @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
 
           accountsAdded++;
-          dbAccount = { id: account.id, accountType: 'N/A' };
         } else {
-          dbAccount = accountQuery.recordset[0];
+          // Check if balances actually changed before updating
+          const existing = existingAccountQuery.recordset[0];
+          const balanceChanged = parseFloat(existing.balance) !== balance || parseFloat(existing.availableBalance) !== availableBalance;
+
+          if (balanceChanged) {
+            await new sql.Request(transaction)
+              .input("accountId", sql.VarChar(100), account.id)
+              .input("userId", sql.UniqueIdentifier, user.id)
+              .input("availableBalance", sql.Decimal(18, 2), availableBalance)
+              .input("balance", sql.Decimal(18, 2), balance)
+              .input("balanceDate", sql.DateTimeOffset, balanceDate)
+              .query(`
+                UPDATE Accounts
+                SET availableBalance = @availableBalance,
+                    balance = @balance,
+                    balanceDate = @balanceDate,
+                    updatedAt = SYSUTCDATETIME()
+                WHERE id = @accountId AND userID = @userId
+              `);
+            accountsUpdated++;
+          }
         }
 
-        // For Debit accounts, update the balance
-        if (dbAccount.accountType === 'Debit') {
-          const balance = parseFloat(account["available-balance"]) || 0;
-          const balanceDate = account["balance-date"]
-            ? new Date(account["balance-date"] * 1000)
-            : null;
+        // If account is new or balances changed, add a new accountBalanceHistory row
+        const isNew = existingAccountQuery.recordset.length === 0;
+        const existing = isNew ? null : existingAccountQuery.recordset[0];
+        const balanceChanged = isNew || parseFloat(existing.balance) !== balance || parseFloat(existing.availableBalance) !== availableBalance;
 
+        if (balanceChanged) {
           await new sql.Request(transaction)
-            .input("accountId", sql.VarChar(100), account.id)
-            .input("userId", sql.UniqueIdentifier, user.id)
+            .input("id", sql.UniqueIdentifier, uuidv4())
+            .input("accountID", sql.VarChar(100), account.id)
+            .input("availableBalance", sql.Decimal(18, 2), availableBalance)
             .input("balance", sql.Decimal(18, 2), balance)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .query(`
-              UPDATE Accounts
-              SET accountBalance = @balance,
-                  balanceDate = @balanceDate,
-                  updatedAt = SYSUTCDATETIME()
-              WHERE id = @accountId AND userID = @userId
+              INSERT INTO AccountBalanceHistory (
+                id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @accountID, @availableBalance, @balance, @balanceDate, SYSUTCDATETIME(), SYSUTCDATETIME()
+              )
             `);
-
-          accountsUpdated++;
         }
 
         // Insert transactions
@@ -913,14 +931,16 @@ app.post("/connect-simplefin", async (req, res, next) => {
             .input("name", sql.NVarChar(255), cleanedName)
             .input("bank", sql.NVarChar(255), account.org?.name || null)
             .input("accountNumber", sql.Char(6), accountNumber)
-            .input("accountBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+            .input("availableBalance", sql.Decimal(18, 2), parseFloat(account["available-balance"]) || 0)
+            .input("balance", sql.Decimal(18, 2), parseFloat(account["balance"]) || 0)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .query(`
               -- Update the account if it already exists
               UPDATE Accounts
               SET bank = @bank,
                   accountNumber = @accountNumber,
-                  accountBalance = @accountBalance,
+                  availableBalance = @availableBalance,
+                  balance = @balance,
                   balanceDate = @balanceDate,
                   updatedAt = SYSUTCDATETIME()
               WHERE id = @id AND userID = @userID;
@@ -929,11 +949,11 @@ app.post("/connect-simplefin", async (req, res, next) => {
               IF @@ROWCOUNT = 0
               BEGIN
                 INSERT INTO Accounts (
-                  id, userID, name, bank, accountNumber, accountBalance, balanceDate,
+                  id, userID, name, bank, accountNumber, availableBalance, balance, balanceDate,
                   accountType, createdAt, updatedAt
                 )
                 VALUES (
-                  @id, @userID, @name, @bank, @accountNumber, @accountBalance, @balanceDate,
+                  @id, @userID, @name, @bank, @accountNumber, @availableBalance, balance, @balanceDate,
                   'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
                 )
               END
@@ -945,7 +965,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
         // After all updates, fetch all accounts for this user
         const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
-            .query(`SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+            .query(`SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
 
         // Return the accounts data
         return result.recordset;
@@ -1124,7 +1144,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const accountsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1204,7 +1224,7 @@ app.get("/accounts", authRequired, async (req, res, next) => {
       const result = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountNumber, accountBalance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC

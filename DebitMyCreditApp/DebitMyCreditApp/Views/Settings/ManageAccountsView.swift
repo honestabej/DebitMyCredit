@@ -167,7 +167,8 @@ struct ManageAccountsView: View {
                 name: finalName,
                 bank: account.bank ?? "",
                 accountNumber: account.accountNumber,
-                accountBalance: account.accountBalance?.doubleValue ?? 0,
+                availableBalance: account.availableBalance?.doubleValue ?? 0,
+                balance: account.balance?.doubleValue ?? 0,
                 accountType: edit.accountType,
                 balanceDate: nil,
                 createdAt: nil,
@@ -400,7 +401,7 @@ struct ManageAccountRow: View {
     checkingAccount.name = "Wells Fargo Checking"
     checkingAccount.bank = "Wells Fargo"
     checkingAccount.accountNumber = "1234"
-    checkingAccount.accountBalance = NSDecimalNumber(value: 2_543.67)
+    checkingAccount.availableBalance = NSDecimalNumber(value: 2_543.67)
     checkingAccount.accountType = "Debit"
     checkingAccount.balanceDate = Date()
     checkingAccount.createdAt = Date()
@@ -411,7 +412,7 @@ struct ManageAccountRow: View {
     savingsAccount.id = "acc_2"
     savingsAccount.name = "Savings Account"
     savingsAccount.bank = "Wells Fargo"
-    savingsAccount.accountBalance = NSDecimalNumber(value: 15_234.89)
+    savingsAccount.availableBalance = NSDecimalNumber(value: 15_234.89)
     savingsAccount.accountType = "N/A"
     savingsAccount.balanceDate = Date()
     savingsAccount.createdAt = Date()
@@ -422,7 +423,7 @@ struct ManageAccountRow: View {
     creditCard.id = "acc_3"
     creditCard.name = "Chase Sapphire Preferred"
     creditCard.bank = "Chase"
-    creditCard.accountBalance = NSDecimalNumber(value: -1_234.56)
+    creditCard.availableBalance = NSDecimalNumber(value: -1_234.56)
     creditCard.accountType = "Credit"
     creditCard.balanceDate = Date().addingTimeInterval(-86400)
     creditCard.createdAt = Date()

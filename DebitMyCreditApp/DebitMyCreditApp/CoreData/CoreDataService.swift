@@ -6,6 +6,50 @@ final class CoreDataService {
     static let shared = CoreDataService()
     private init() {}
 
+    // Palette of distinct colors for account color assignment
+    private static let accountColorPalette: [String] = [
+        "#FF3B30", // Red
+        "#FF9500", // Orange
+        "#FFCC00", // Yellow
+        "#34C759", // Green
+        "#00C7BE", // Teal
+        "#007AFF", // Blue
+        "#5856D6", // Indigo
+        "#AF52DE", // Purple
+        "#FF2D55", // Pink
+        "#A2845E", // Brown
+        "#FF6B6B", // Coral
+        "#FF9F43", // Tangerine
+        "#FFC300", // Amber
+        "#2ECC71", // Emerald
+        "#1ABC9C", // Turquoise
+        "#3498DB", // Sky Blue
+        "#2980B9", // Dodger Blue
+        "#9B59B6", // Amethyst
+        "#E91E63", // Rose
+        "#F06292", // Light Pink
+        "#26C6DA", // Cyan
+        "#66BB6A", // Light Green
+        "#D4E157", // Lime
+        "#FFA726", // Deep Orange
+        "#8D6E63", // Mocha
+        "#78909C", // Blue Grey
+        "#EC407A", // Hot Pink
+        "#AB47BC", // Medium Purple
+        "#7E57C2", // Deep Purple
+        "#42A5F5", // Light Blue
+        "#26A69A", // Dark Teal
+        "#EF5350", // Light Red
+        "#BDBDBD", // Grey
+        "#FF7043", // Deep Coral
+        "#29B6F6", // Ice Blue
+    ]
+
+    /// Returns a random hex color string from the account color palette
+    static func randomAccountColor() -> String {
+        accountColorPalette.randomElement() ?? "#007AFF"
+    }
+
     // Background context for large syncs
     func backgroundContext() -> NSManagedObjectContext {
         PersistenceController.shared.container.newBackgroundContext()
@@ -105,10 +149,15 @@ final class CoreDataService {
                 localAccount.name = serverAccount.name
                 localAccount.bank = serverAccount.bank
                 localAccount.accountNumber = serverAccount.accountNumber ?? ""
-                localAccount.accountBalance = NSDecimalNumber(value: serverAccount.accountBalance)
+                localAccount.availableBalance = NSDecimalNumber(value: serverAccount.availableBalance)
+                localAccount.balance = NSDecimalNumber(value: serverAccount.balance)
                 localAccount.accountType = serverAccount.accountType
                 
                 // Set the user relationship
+                if isNewAccount {
+                    localAccount.accountColor = CoreDataService.randomAccountColor()
+                }
+
                 if let userEntity = userEntity {
                     localAccount.user = userEntity
 //                    print("   - \(isNewAccount ? "Creating" : "Updating") account: \(serverAccount.name) (user: \(userEntity.email ?? "unknown"))")

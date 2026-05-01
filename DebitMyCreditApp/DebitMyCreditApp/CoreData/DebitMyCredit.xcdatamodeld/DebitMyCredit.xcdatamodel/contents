@@ -1,19 +1,30 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24512" systemVersion="25D125" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
     <entity name="Account" representedClassName="Account" syncable="YES" codeGenerationType="class">
-        <attribute name="accountBalance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="accountColor" optional="YES" attributeType="String"/>
         <attribute name="accountNumber" optional="YES" attributeType="String"/>
         <attribute name="accountType" optional="YES" attributeType="String"/>
-        <attribute name="activeBalance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="availableBalance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="balance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
         <attribute name="balanceDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="bank" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="id" optional="YES" attributeType="String"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="accountBalanceHistories" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="AccountBalanceHistory" inverseName="account" inverseEntity="AccountBalanceHistory"/>
         <relationship name="allocations" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="TransactionAllocation" inverseName="account" inverseEntity="TransactionAllocation"/>
         <relationship name="transactions" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Transaction" inverseName="account" inverseEntity="Transaction"/>
         <relationship name="user" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="User" inverseName="accounts" inverseEntity="User"/>
+    </entity>
+    <entity name="AccountBalanceHistory" representedClassName="AccountBalanceHistory" syncable="YES" codeGenerationType="class">
+        <attribute name="availableBalance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="balance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="balanceDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="account" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Account" inverseName="accountBalanceHistories" inverseEntity="Account"/>
     </entity>
     <entity name="Transaction" representedClassName="Transaction" syncable="YES" codeGenerationType="class">
         <attribute name="amount" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
@@ -31,6 +42,8 @@
     </entity>
     <entity name="TransactionAllocation" representedClassName="TransactionAllocation" syncable="YES" codeGenerationType="class">
         <attribute name="amount" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="account" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Account" inverseName="allocations" inverseEntity="Account"/>
         <relationship name="transaction" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Transaction" inverseName="allocations" inverseEntity="Transaction"/>
     </entity>

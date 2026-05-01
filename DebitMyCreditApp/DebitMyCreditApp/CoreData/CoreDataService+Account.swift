@@ -39,6 +39,7 @@ extension CoreDataService {
                 accountEntity = Account(context: context)
                 accountEntity.id = accountID
                 accountEntity.createdAt = Date()
+                accountEntity.accountColor = CoreDataService.randomAccountColor()
                 print("Creating new account: \(name)")
             }
             
@@ -47,11 +48,18 @@ extension CoreDataService {
             accountEntity.bank = bank
             accountEntity.accountNumber = accountNumber
             
-            // Parse account balance (available-balance or accountBalance from response)
-            if let balanceValue = accountData["accountBalance"] as? Double {
-                accountEntity.accountBalance = NSDecimalNumber(value: balanceValue)
-            } else if let balanceValue = accountData["accountBalance"] as? NSNumber {
-                accountEntity.accountBalance = NSDecimalNumber(decimal: balanceValue.decimalValue)
+            // Parse account availableBalance (available-balance or availableBalance from response)
+            if let balanceValue = accountData["availableBalance"] as? Double {
+                accountEntity.availableBalance = NSDecimalNumber(value: balanceValue)
+            } else if let balanceValue = accountData["availableBalance"] as? NSNumber {
+                accountEntity.availableBalance = NSDecimalNumber(decimal: balanceValue.decimalValue)
+            }
+            
+            // Parse account balance
+            if let balanceValue = accountData["balance"] as? Double {
+                accountEntity.balance = NSDecimalNumber(value: balanceValue)
+            } else if let balanceValue = accountData["balance"] as? NSNumber {
+                accountEntity.balance = NSDecimalNumber(decimal: balanceValue.decimalValue)
             }
             
             // Parse account type
