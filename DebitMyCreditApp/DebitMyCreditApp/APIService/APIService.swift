@@ -42,8 +42,8 @@ enum HTTPMethod: String {
 class APIService {
     static let shared = APIService()
     
-//    private let baseURL = "https://debitmycredit.azurewebsites.net"
-    private let baseURL = "http://localhost:3000"
+    private let baseURL = "https://debitmycredit.azurewebsites.net"
+//    private let baseURL = "http://localhost:3000"
     private let session: URLSession
     
     // Conifgure retry settings for waking server and/or AzureDB

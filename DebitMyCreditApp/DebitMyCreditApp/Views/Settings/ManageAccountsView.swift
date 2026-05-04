@@ -346,6 +346,7 @@ struct ManageAccountRow: View {
                         Text("N/A").tag("N/A")
                         Text("Debit").tag("Debit")
                         Text("Credit").tag("Credit")
+                        Text("Other").tag("Other")
                     }
                     .pickerStyle(.segmented)
                     .controlSize(.mini)
