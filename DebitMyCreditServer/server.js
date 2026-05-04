@@ -262,27 +262,21 @@ async function syncSimpleFinDataForUser(user) {
 
           accountsAdded++;
         } else {
-          // Check if balances actually changed before updating
-          const existing = existingAccountQuery.recordset[0];
-          const balanceChanged = parseFloat(existing.balance) !== balance || parseFloat(existing.availableBalance) !== availableBalance;
-
-          if (balanceChanged) {
-            await new sql.Request(transaction)
-              .input("accountId", sql.VarChar(100), account.id)
-              .input("userId", sql.UniqueIdentifier, user.id)
-              .input("availableBalance", sql.Decimal(18, 2), availableBalance)
-              .input("balance", sql.Decimal(18, 2), balance)
-              .input("balanceDate", sql.DateTimeOffset, balanceDate)
-              .query(`
-                UPDATE Accounts
-                SET availableBalance = @availableBalance,
-                    balance = @balance,
-                    balanceDate = @balanceDate,
-                    updatedAt = SYSUTCDATETIME()
-                WHERE id = @accountId AND userID = @userId
-              `);
-            accountsUpdated++;
-          }
+          await new sql.Request(transaction)
+            .input("accountId", sql.VarChar(100), account.id)
+            .input("userId", sql.UniqueIdentifier, user.id)
+            .input("availableBalance", sql.Decimal(18, 2), availableBalance)
+            .input("balance", sql.Decimal(18, 2), balance)
+            .input("balanceDate", sql.DateTimeOffset, balanceDate)
+            .query(`
+              UPDATE Accounts
+              SET availableBalance = @availableBalance,
+                  balance = @balance,
+                  balanceDate = @balanceDate,
+                  updatedAt = SYSUTCDATETIME()
+              WHERE id = @accountId AND userID = @userId
+            `);
+          accountsUpdated++;
         }
 
         // If account is new or balances changed, add a new accountBalanceHistory row
