@@ -244,6 +244,7 @@ async function syncSimpleFinDataForUser(user) {
           await new sql.Request(transaction)
             .input("id", sql.VarChar(100), account.id)
             .input("userID", sql.UniqueIdentifier, user.id)
+            .input("accountSource", sql.NVarChar(255), "SimpleFIN")
             .input("name", sql.NVarChar(255), cleanedName)
             .input("bank", sql.NVarChar(255), account.org?.name || null)
             .input("accountNumber", sql.Char(6), accountNumber)
@@ -253,10 +254,10 @@ async function syncSimpleFinDataForUser(user) {
             .input("accountType", sql.VarChar(50), 'N/A')
             .query(`
               INSERT INTO Accounts (
-                id, userID, name, bank, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt
+                id, userID, name, bank, accountSource, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt
               )
               VALUES (
-                @id, @userID, @name, @bank, @accountNumber, @availableBalance, @balance, @balanceDate, @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
+                @id, @userID, @name, @bank, @accountSource, @accountNumber, @availableBalance, @balance, @balanceDate, @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
 
@@ -1138,7 +1139,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const accountsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1218,7 +1219,7 @@ app.get("/accounts", authRequired, async (req, res, next) => {
       const result = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
+          SELECT id, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
