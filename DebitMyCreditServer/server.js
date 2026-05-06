@@ -1597,7 +1597,7 @@ app.post("/user/sync-bg", authRequired, async (req, res, next) => {
 // Awaits the SimpleFIN and Lunch Flow sync and responds only when complete
 app.post("/user/sync", authRequired, async (req, res, next) => {
   try {
-    const userID = req.body.userID;
+    const userID = req.user?.id ?? req.body.userID;
 
     console.log(`[SYNC] Starting sync for user ${userID}`);
 
@@ -1619,6 +1619,16 @@ app.post("/user/sync", authRequired, async (req, res, next) => {
         `);
       return result.recordset[0];
     });
+
+    // console.log(`[SYNC] User row:`, JSON.stringify({
+    //   found: !!user,
+    //   hasSimpleFinData: !!user?.simpleFinAccessURLData,
+    //   hasSimpleFinIV: !!user?.simpleFinAccessURLIV,
+    //   hasSimpleFinTag: !!user?.simpleFinAccessURLTag,
+    //   hasLunchFlowData: !!user?.lunchFlowAPIKeyData,
+    //   hasLunchFlowIV: !!user?.lunchFlowAPIKeyIV,
+    //   hasLunchFlowTag: !!user?.lunchFlowAPIKeyTag,
+    // }));
 
     const hasSimpleFin = user?.simpleFinAccessURLData && user?.simpleFinAccessURLIV && user?.simpleFinAccessURLTag;
     const hasLunchFlow = user?.lunchFlowAPIKeyData && user?.lunchFlowAPIKeyIV && user?.lunchFlowAPIKeyTag;
