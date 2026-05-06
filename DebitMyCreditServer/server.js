@@ -103,6 +103,12 @@ function getUnixTime30DaysAgo() {
   return Math.floor(thirtyDaysAgo.getTime() / 1000);
 }
 
+// Returns the date 30 days ago formatted as YYYY-MM-DD, to be used in the Lunch Flow API call
+function getDate30DaysAgo() {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  return thirtyDaysAgo.toISOString().split('T')[0];
+}
+
 // Wrapper for any SQL Query to the DB to handle sleeping DB issues
 async function queryWithRetry(callback, options = {}) {
   const maxRetries = options.maxRetries || 3;
@@ -392,7 +398,278 @@ async function syncSimpleFinDataForUser(user) {
     }
   });
 
-  console.log(`[SYNC] User ${user.id}: Complete - ${stats.accountsUpdated} accounts updated, ${stats.accountsAdded} accounts added, ${stats.transactionsInserted} transactions inserted, ${stats.pendingTransactionsRemoved} pending transactions removed`);
+  console.log(`[SYNC] User ${user.id}: SimpleFIN sync complete - ${stats.accountsUpdated} accounts updated, ${stats.accountsAdded} accounts added, ${stats.transactionsInserted} transactions inserted, ${stats.pendingTransactionsRemoved} pending transactions removed`);
+
+  return stats;
+}
+
+// Shared function to sync Lunch Flow data for a single user
+async function syncLunchFlowDataForUser(user) {
+  const lunchFlowBaseURL = "https://www.lunchflow.app/api/v1";
+
+  // Decrypt the API key
+  const apiKey = decrypt({
+    data: user.lunchFlowAPIKeyData,
+    iv: user.lunchFlowAPIKeyIV,
+    tag: user.lunchFlowAPIKeyTag
+  });
+
+  // Fetch accounts from Lunch Flow
+  const lfResponse = await fetch(`${lunchFlowBaseURL}/accounts`, {
+    method: "GET",
+    headers: { "x-api-key": apiKey }
+  });
+
+  if (!lfResponse.ok) {
+    throw new Error(`Lunch Flow API error: ${lfResponse.status}`);
+  }
+
+  const body = await lfResponse.json();
+  const accounts = body.accounts || body || [];
+
+  console.log(`[SYNC] User ${user.id}: Fetched ${accounts.length} accounts from Lunch Flow`);
+
+  // Fetch balances and transactions for all accounts in parallel
+  const [balanceResults, transactionResults] = await Promise.all([
+    Promise.all(
+      accounts.map(account =>
+        fetch(`${lunchFlowBaseURL}/accounts/${account.id}/balance`, {
+          method: "GET",
+          headers: { "x-api-key": apiKey }
+        })
+        .then(res => {
+          if (!res.ok) throw new Error(`Balance fetch failed: ${res.status}`);
+          return res.json();
+        })
+        .then(balanceData => ({ accountId: account.id, balanceData }))
+      )
+    ),
+    Promise.all(
+      accounts.map(account =>
+        fetch(`${lunchFlowBaseURL}/accounts/${account.id}/transactions?from=${getDate30DaysAgo()}&include_pending=true`, {
+          method: "GET",
+          headers: { "x-api-key": apiKey }
+        })
+        .then(res => {
+          if (!res.ok) throw new Error(`Transactions fetch failed: ${res.status}`);
+          return res.json();
+        })
+        .then(data => ({ accountId: account.id, transactions: data.transactions || [] }))
+      )
+    )
+  ]);
+
+  const balanceMap = new Map(balanceResults.map(b => [b.accountId, b.balanceData]));
+  const transactionMap = new Map(transactionResults.map(t => [t.accountId, t.transactions]));
+
+  const stats = await queryWithRetry(async (pool) => {
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    let accountsUpdated = 0;
+    let accountsAdded = 0;
+    let transactionsInserted = 0;
+    let pendingTransactionsRemoved = 0;
+
+    try {
+      for (const account of accounts) {
+        const balanceData = balanceMap.get(account.id);
+        const rawBalance =
+          balanceData?.balance ??
+          balanceData?.current_balance ??
+          balanceData?.amount ??
+          0;
+        const balance = parseFloat(rawBalance?.amount ?? rawBalance) || 0;
+
+        const existingAccountQuery = await new sql.Request(transaction)
+          .input("accountId", sql.VarChar(100), String(account.id))
+          .input("userId", sql.UniqueIdentifier, user.id)
+          .query(`
+            SELECT id, balance, availableBalance
+            FROM Accounts
+            WHERE id = @accountId AND userID = @userId
+          `);
+
+        if (existingAccountQuery.recordset.length === 0) {
+          // Insert new account
+          await new sql.Request(transaction)
+            .input("id", sql.VarChar(100), String(account.id))
+            .input("userID", sql.UniqueIdentifier, user.id)
+            .input("name", sql.NVarChar(255), account.name || "Unnamed")
+            .input("bank", sql.NVarChar(255), account.institution_name || null)
+            .input("balance", sql.Decimal(18, 2), balance)
+            .input("availableBalance", sql.Decimal(18, 2), balance)
+            .query(`
+              INSERT INTO Accounts (
+                id, userID, name, bank, accountSource,
+                availableBalance, balance, balanceDate,
+                accountType, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @userID, @name, @bank, 'Lunch Flow',
+                @availableBalance, @balance, SYSUTCDATETIME(),
+                'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
+              )
+            `);
+
+          // Record initial balance history
+          await new sql.Request(transaction)
+            .input("id", sql.UniqueIdentifier, uuidv4())
+            .input("accountID", sql.VarChar(100), String(account.id))
+            .input("balance", sql.Decimal(18, 2), balance)
+            .input("availableBalance", sql.Decimal(18, 2), balance)
+            .query(`
+              INSERT INTO AccountBalanceHistory (
+                id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @accountID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
+              )
+            `);
+
+          accountsAdded++;
+
+        } else {
+          // Update existing account
+          const existing = existingAccountQuery.recordset[0];
+          const balanceChanged =
+            parseFloat(existing.balance) !== balance ||
+            parseFloat(existing.availableBalance) !== balance;
+
+          if (balanceChanged) {
+            await new sql.Request(transaction)
+              .input("accountId", sql.VarChar(100), String(account.id))
+              .input("userId", sql.UniqueIdentifier, user.id)
+              .input("balance", sql.Decimal(18, 2), balance)
+              .input("availableBalance", sql.Decimal(18, 2), balance)
+              .query(`
+                UPDATE Accounts
+                SET balance = @balance,
+                    availableBalance = @availableBalance,
+                    balanceDate = SYSUTCDATETIME(),
+                    updatedAt = SYSUTCDATETIME()
+                WHERE id = @accountId AND userID = @userId
+              `);
+
+            await new sql.Request(transaction)
+              .input("id", sql.UniqueIdentifier, uuidv4())
+              .input("accountID", sql.VarChar(100), String(account.id))
+              .input("balance", sql.Decimal(18, 2), balance)
+              .input("availableBalance", sql.Decimal(18, 2), balance)
+              .query(`
+                INSERT INTO AccountBalanceHistory (
+                  id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+                )
+                VALUES (
+                  @id, @accountID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
+                )
+              `);
+          } else {
+            await new sql.Request(transaction)
+              .input("accountId", sql.VarChar(100), String(account.id))
+              .input("userId", sql.UniqueIdentifier, user.id)
+              .input("balance", sql.Decimal(18, 2), balance)
+              .input("availableBalance", sql.Decimal(18, 2), balance)
+              .query(`
+                UPDATE Accounts
+                SET balance = @balance,
+                    availableBalance = @availableBalance,
+                    updatedAt = SYSUTCDATETIME()
+                WHERE id = @accountId AND userID = @userId
+              `);
+          }
+
+          accountsUpdated++;
+        }
+
+        // Sync transactions for this account
+        const lfTxns = transactionMap.get(account.id) || [];
+        const lfTxnIds = lfTxns.map(txn => String(txn.id));
+
+        // Remove orphaned pending transactions no longer in the Lunch Flow response
+        const orphanedTxns = await new sql.Request(transaction)
+          .input("accountId", sql.VarChar(100), String(account.id))
+          .query(`
+            SELECT id
+            FROM Transactions
+            WHERE accountID = @accountId AND pending = 1
+          `);
+
+        for (const dbTxn of orphanedTxns.recordset) {
+          if (!lfTxnIds.includes(dbTxn.id)) {
+            await new sql.Request(transaction)
+              .input("txnId", sql.VarChar(100), dbTxn.id)
+              .query(`DELETE FROM Transactions WHERE id = @txnId`);
+
+            pendingTransactionsRemoved++;
+          }
+        }
+
+        // Insert/update transactions
+        for (const txn of lfTxns) {
+          if (!txn.id) continue;
+
+          const txnId = String(txn.id);
+          const txnDate = txn.date ? new Date(txn.date) : new Date();
+          const isPending = txn.isPending || false;
+
+          const existingTxn = await new sql.Request(transaction)
+            .input("txnId", sql.VarChar(100), txnId)
+            .query(`SELECT id, pending FROM Transactions WHERE id = @txnId`);
+
+          if (existingTxn.recordset.length === 0) {
+            await new sql.Request(transaction)
+              .input("id", sql.VarChar(100), txnId)
+              .input("accountId", sql.VarChar(100), String(account.id))
+              .input("userID", sql.UniqueIdentifier, user.id)
+              .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
+              .input("name", sql.NVarChar(500), txn.merchant || "Unknown")
+              .input("notes", sql.NVarChar(500), txn.description || "")
+              .input("transactionDate", sql.DateTimeOffset, txnDate)
+              .input("pending", sql.Bit, isPending)
+              .query(`
+                INSERT INTO Transactions (
+                  id, accountID, userID, amount, name, notes,
+                  transactionDate, pending, createdAt, updatedAt
+                )
+                VALUES (
+                  @id, @accountId, @userID, @amount, @name, @notes,
+                  @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
+                )
+              `);
+
+            transactionsInserted++;
+          } else {
+            // Update if pending status changed
+            const existingPending = existingTxn.recordset[0].pending;
+
+            if (existingPending !== isPending) {
+              await new sql.Request(transaction)
+                .input("txnId", sql.VarChar(100), txnId)
+                .input("pending", sql.Bit, isPending)
+                .input("transactionDate", sql.DateTimeOffset, txnDate)
+                .query(`
+                  UPDATE Transactions
+                  SET pending = @pending,
+                      transactionDate = @transactionDate,
+                      updatedAt = SYSUTCDATETIME()
+                  WHERE id = @txnId
+                `);
+            }
+          }
+        }
+      }
+
+      await transaction.commit();
+      return { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved };
+
+    } catch (dbErr) {
+      await transaction.rollback();
+      throw dbErr;
+    }
+  });
+
+  console.log(`[SYNC] User ${user.id}: Lunch Flow sync complete - ${stats.accountsUpdated} accounts updated, ${stats.accountsAdded} accounts added, ${stats.transactionsInserted} transactions inserted, ${stats.pendingTransactionsRemoved} pending transactions removed`);
 
   return stats;
 }
@@ -542,7 +819,7 @@ app.get("/test", async (req, res, next) => {
 })
 
 // Internal call from GitHub action to keep DB up to date
-app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => {
+app.post("/internal/sync-connected-bank-data", verifyCron, async (req, res, next) => {
   try {
     let usersProcessed = 0;
     let totalAccountsUpdated = 0;
@@ -551,35 +828,47 @@ app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => 
     let totalPendingTransactionsRemoved = 0;
     const errors = [];
 
-    // Get all of the userIDs and accessURL params of users that have accessURLs
+    // Get all users that have at least one connected service
     const usersWithAccess = await queryWithRetry(async (pool) => {
       const result = await pool.request()
         .query(`
-          SELECT 
+          SELECT
             id,
             simpleFinAccessURLData,
             simpleFinAccessURLIV,
-            simpleFinAccessURLTag
+            simpleFinAccessURLTag,
+            lunchFlowAPIKeyData,
+            lunchFlowAPIKeyIV,
+            lunchFlowAPIKeyTag
           FROM Users
-          WHERE simpleFinAccessURLData IS NOT NULL
-            AND simpleFinAccessURLIV IS NOT NULL
-            AND simpleFinAccessURLTag IS NOT NULL
+          WHERE (simpleFinAccessURLData IS NOT NULL AND simpleFinAccessURLIV IS NOT NULL AND simpleFinAccessURLTag IS NOT NULL)
+             OR (lunchFlowAPIKeyData IS NOT NULL AND lunchFlowAPIKeyIV IS NOT NULL AND lunchFlowAPIKeyTag IS NOT NULL)
         `);
       return result.recordset;
     });
 
-    console.log(`[SYNC] Found ${usersWithAccess.length} users with SimpleFin access`);
+    console.log(`[SYNC] Found ${usersWithAccess.length} users with connected accounts`);
 
-    // Process each user using shared sync function
+    // Process each user using shared sync functions
     for (const user of usersWithAccess) {
       try {
-        const stats = await syncSimpleFinDataForUser(user);
-        
+        const hasSimpleFin = user.simpleFinAccessURLData && user.simpleFinAccessURLIV && user.simpleFinAccessURLTag;
+        const hasLunchFlow = user.lunchFlowAPIKeyData && user.lunchFlowAPIKeyIV && user.lunchFlowAPIKeyTag;
+
+        const [simpleFinStats, lunchFlowStats] = await Promise.all([
+          hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(null),
+          hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(null),
+        ]);
+
         usersProcessed++;
-        totalAccountsUpdated += stats.accountsUpdated;
-        totalAccountsAdded += stats.accountsAdded;
-        totalTransactionsInserted += stats.transactionsInserted;
-        totalPendingTransactionsRemoved += stats.pendingTransactionsRemoved;
+
+        for (const stats of [simpleFinStats, lunchFlowStats]) {
+          if (!stats) continue;
+          totalAccountsUpdated += stats.accountsUpdated;
+          totalAccountsAdded += stats.accountsAdded;
+          totalTransactionsInserted += stats.transactionsInserted;
+          totalPendingTransactionsRemoved += stats.pendingTransactionsRemoved;
+        }
 
       } catch (userErr) {
         console.error(`[SYNC] Error processing user ${user.id}:`, userErr.message);
@@ -590,8 +879,8 @@ app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => 
       }
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `Sync complete: ${usersProcessed} users processed`,
       stats: {
         usersProcessed,
@@ -608,7 +897,7 @@ app.post("/internal/sync-simplefin-data", verifyCron, async (req, res, next) => 
   }
 });
 
-app.post("/manual/sync-simplefin-data", async (req, res, next) => {
+app.post("/manual/sync-connected-bank-data", async (_req, res, next) => {
   try {
     let usersProcessed = 0;
     let totalAccountsUpdated = 0;
@@ -617,35 +906,47 @@ app.post("/manual/sync-simplefin-data", async (req, res, next) => {
     let totalPendingTransactionsRemoved = 0;
     const errors = [];
 
-    // Get all of the userIDs and accessURL params of users that have accessURLs
+    // Get all users that have at least one connected service
     const usersWithAccess = await queryWithRetry(async (pool) => {
       const result = await pool.request()
         .query(`
-          SELECT 
+          SELECT
             id,
             simpleFinAccessURLData,
             simpleFinAccessURLIV,
-            simpleFinAccessURLTag
+            simpleFinAccessURLTag,
+            lunchFlowAPIKeyData,
+            lunchFlowAPIKeyIV,
+            lunchFlowAPIKeyTag
           FROM Users
-          WHERE simpleFinAccessURLData IS NOT NULL
-            AND simpleFinAccessURLIV IS NOT NULL
-            AND simpleFinAccessURLTag IS NOT NULL
+          WHERE (simpleFinAccessURLData IS NOT NULL AND simpleFinAccessURLIV IS NOT NULL AND simpleFinAccessURLTag IS NOT NULL)
+             OR (lunchFlowAPIKeyData IS NOT NULL AND lunchFlowAPIKeyIV IS NOT NULL AND lunchFlowAPIKeyTag IS NOT NULL)
         `);
       return result.recordset;
     });
 
-    console.log(`[SYNC] Found ${usersWithAccess.length} users with SimpleFin access`);
+    console.log(`[SYNC] Found ${usersWithAccess.length} users with connected accounts`);
 
-    // Process each user using shared sync function
+    // Process each user using shared sync functions
     for (const user of usersWithAccess) {
       try {
-        const stats = await syncSimpleFinDataForUser(user);
-        
+        const hasSimpleFin = user.simpleFinAccessURLData && user.simpleFinAccessURLIV && user.simpleFinAccessURLTag;
+        const hasLunchFlow = user.lunchFlowAPIKeyData && user.lunchFlowAPIKeyIV && user.lunchFlowAPIKeyTag;
+
+        const [simpleFinStats, lunchFlowStats] = await Promise.all([
+          hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(null),
+          hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(null),
+        ]);
+
         usersProcessed++;
-        totalAccountsUpdated += stats.accountsUpdated;
-        totalAccountsAdded += stats.accountsAdded;
-        totalTransactionsInserted += stats.transactionsInserted;
-        totalPendingTransactionsRemoved += stats.pendingTransactionsRemoved;
+
+        for (const stats of [simpleFinStats, lunchFlowStats]) {
+          if (!stats) continue;
+          totalAccountsUpdated += stats.accountsUpdated;
+          totalAccountsAdded += stats.accountsAdded;
+          totalTransactionsInserted += stats.transactionsInserted;
+          totalPendingTransactionsRemoved += stats.pendingTransactionsRemoved;
+        }
 
       } catch (userErr) {
         console.error(`[SYNC] Error processing user ${user.id}:`, userErr.message);
@@ -656,8 +957,8 @@ app.post("/manual/sync-simplefin-data", async (req, res, next) => {
       }
     }
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `Sync complete: ${usersProcessed} users processed`,
       stats: {
         usersProcessed,
@@ -772,7 +1073,7 @@ app.post("/login", async (req, res, next) => {
       const queryResult = await pool.request()
         .input("email", sql.VarChar(255), email)
         .query(`
-          SELECT id, email, simpleFinAccessURLData, createdAt, updatedAt, passwordHash
+          SELECT id, email, simpleFinAccessURLData, lunchFlowAPIKeyData, createdAt, updatedAt, passwordHash
           FROM Users
           WHERE email = @email
         `);
@@ -784,11 +1085,13 @@ app.post("/login", async (req, res, next) => {
       const user = queryResult.recordset[0];
       const valid = await bcrypt.compare(password, user.passwordHash);
 
-      // Check if SimpleFIN credentials are set
+      // Check if credentials are set for each service
       const simpleFINConnected = user.simpleFinAccessURLData != null && user.simpleFinAccessURLData !== '';
-      
+      const lunchFlowConnected = user.lunchFlowAPIKeyData != null && user.lunchFlowAPIKeyData !== '';
+
       // Remove sensitive fields before returning
       delete user.simpleFinAccessURLData;
+      delete user.lunchFlowAPIKeyData;
       delete user.passwordHash;
 
       if (!valid) {
@@ -798,11 +1101,11 @@ app.post("/login", async (req, res, next) => {
       // Generate JWT
       const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
 
-      return { 
-        found: true, 
+      return {
+        found: true,
         valid: true,
         token,
-        user: { ...user, simpleFINConnected }
+        user: { ...user, simpleFINConnected, lunchFlowConnected }
       };
     });
 
@@ -1028,8 +1331,212 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
   } 
 });
 
+// Connect the User's Lunch Flow account
+app.post("/connect-lunchflow", async (req, res, next) => {
+  try {
+    // Get id and api key from user
+    const { userID, apiKey } = req.body;
+    if (!userID || !apiKey) return res.status(400).json({ 
+      success: false,
+      message: "userID and api key required",
+      accounts: null
+    });
+
+    // Ensure API Key works and get the accounts
+    const lunchFlowBaseURL = "https://www.lunchflow.app/api/v1"
+
+    const lfResponse = await fetch(`${lunchFlowBaseURL}/accounts`, {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+
+    if (!lfResponse.ok) {
+      throw new Error(`Lunch Flow API error: ${lfResponse.status}`);
+    }
+
+    const body = await lfResponse.json();
+    const accounts = body.accounts || body || [];
+
+    // Get the balances of all accounts in parallel
+    const balancePromises = accounts.map(account =>
+      fetch(`${lunchFlowBaseURL}/accounts/${account.id}/balance`, {
+        method: "GET",
+        headers: {
+          "x-api-key": apiKey
+        }
+      })
+      .then(res => {
+        if (!res.ok) throw new Error(`Balance fetch failed: ${res.status}`);
+        return res.json();
+      })
+      .then(balanceData => ({
+        accountId: account.id,
+        balanceData
+      }))
+    );
+
+    const balanceResults = await Promise.all(balancePromises);
+
+    // Add the balance info to each account
+    const balanceMap = new Map(
+      balanceResults.map(b => [b.accountId, b.balanceData])
+    );
+
+    for (const account of accounts) {
+      const balanceData = balanceMap.get(account.id);
+
+      // Adjust based on actual API response shape
+      const balanceValue =
+        balanceData?.balance ??
+        balanceData?.current_balance ??
+        balanceData?.amount ??
+        0;
+
+      account.availableBalance = balanceValue;
+      account.balance = balanceValue;
+    }
+
+    // Encrypt the api key before storing it in the database
+    const accessEnc = encrypt(apiKey);
+    
+    const userAccounts = await queryWithRetry(async (pool) => {
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
+
+      try {
+        // Store encrypted API key
+        await new sql.Request(transaction)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("data", sql.VarChar(sql.MAX), accessEnc.data)
+          .input("iv", sql.VarChar(32), accessEnc.iv)
+          .input("tag", sql.VarChar(32), accessEnc.tag)
+          .query(`
+            UPDATE Users
+            SET lunchFlowAPIKeyData = @data,
+                lunchFlowAPIKeyIV = @iv,
+                lunchFlowAPIKeyTag = @tag,
+                updatedAt = SYSUTCDATETIME()
+            WHERE id = @userID
+          `);
+
+        // Upsert accounts
+        for (const account of accounts) {
+          const cleanedName = account.name || "Unnamed";
+
+          await new sql.Request(transaction)
+            .input("id", sql.VarChar(100), String(account.id))
+            .input("userID", sql.UniqueIdentifier, userID)
+            .input("name", sql.NVarChar(255), cleanedName)
+            .input("bank", sql.NVarChar(255), account.institution_name || null)
+            .input("availableBalance", sql.Decimal(18, 2), parseFloat(account.availableBalance.amount) || 0)
+            .input("balance", sql.Decimal(18, 2), parseFloat(account.balance.amount) || 0)
+            .query(`
+              UPDATE Accounts
+              SET bank = @bank,
+                  availableBalance = @availableBalance,
+                  balance = @balance,
+                  balanceDate = SYSUTCDATETIME(),
+                  updatedAt = SYSUTCDATETIME()
+              WHERE id = @id AND userID = @userID;
+
+              IF @@ROWCOUNT = 0
+              BEGIN
+                INSERT INTO Accounts (
+                  id, userID, name, bank, accountSource,
+                  availableBalance, balance, balanceDate,
+                  accountType, createdAt, updatedAt
+                )
+                VALUES (
+                  @id, @userID, @name, @bank, 'Lunch Flow',
+                  @availableBalance, @balance, SYSUTCDATETIME(),
+                  'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
+                )
+              END
+            `);
+        }
+
+        await transaction.commit();
+
+        const result = await pool.request()
+          .input("userID", sql.UniqueIdentifier, userID)
+          .query(`
+            SELECT id, name, bank, accountSource,
+                   availableBalance, balance,
+                   accountType, createdAt, updatedAt
+            FROM Accounts
+            WHERE userID = @userID
+          `);
+
+        return result.recordset;
+
+      } catch (dbErr) {
+        await transaction.rollback();
+        throw dbErr;
+      }
+
+    });
+
+    return res.json({
+      success: true,
+      message: "Lunch Flow connected successfully",
+      accounts: accounts
+
+    });
+
+  } catch (err) {
+    next(err);
+  } 
+});
+
+// Disconnect a User's Lunch Flow account
+app.post("/disconnect-lunchflow", async (req, res, next) => {
+  try {
+    // Get id and token from user
+    const { userID } = req.body;
+    if (!userID) return res.status(400).json({ 
+      success: false,
+      message: "userID required"
+    });
+
+    // Wrap database operations in retry wrapper
+    const result = await queryWithRetry(async (pool) => {
+      // Query the DB to set the Lunch Flow data to NULL
+      const updateResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE Users
+          SET lunchFlowAPIKeyData = NULL,
+              lunchFlowAPIKeyIV = NULL,
+              lunchFlowAPIKeyTag = NULL,
+              updatedAt = SYSUTCDATETIME()
+          WHERE id = @userID
+        `);
+      
+      return { rowsAffected: updateResult.rowsAffected[0] };
+    });
+    
+    // Check result OUTSIDE the wrapper
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found or already disconnected"
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "SimpleFIN account disconnected"
+    });
+
+  } catch (err) {
+    next(err);
+  } 
+});
+
 // Trigger background sync for the authenticated user
-// Responds immediately and runs the SimpleFIN sync in the background (fire and forget)
+// Responds immediately and runs the sync in the background (fire and forget)
 app.post("/user/sync-bg", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
@@ -1045,7 +1552,7 @@ app.post("/user/sync-bg", authRequired, async (req, res, next) => {
       try {
         console.log(`[SYNC] Starting background sync for user ${userID}`);
 
-        // Get user's access URL
+        // Get user's credentials for all connected services
         const user = await queryWithRetry(async (pool) => {
           const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
@@ -1054,23 +1561,28 @@ app.post("/user/sync-bg", authRequired, async (req, res, next) => {
                 id,
                 simpleFinAccessURLData,
                 simpleFinAccessURLIV,
-                simpleFinAccessURLTag
+                simpleFinAccessURLTag,
+                lunchFlowAPIKeyData,
+                lunchFlowAPIKeyIV,
+                lunchFlowAPIKeyTag
               FROM Users
               WHERE id = @userID
-                AND simpleFinAccessURLData IS NOT NULL
-                AND simpleFinAccessURLIV IS NOT NULL
-                AND simpleFinAccessURLTag IS NOT NULL
             `);
           return result.recordset[0];
         });
 
-        if (!user) {
-          console.log(`[SYNC] User ${userID} has no SimpleFin connection, skipping sync`);
+        const hasSimpleFin = user?.simpleFinAccessURLData && user?.simpleFinAccessURLIV && user?.simpleFinAccessURLTag;
+        const hasLunchFlow = user?.lunchFlowAPIKeyData && user?.lunchFlowAPIKeyIV && user?.lunchFlowAPIKeyTag;
+
+        if (!hasSimpleFin && !hasLunchFlow) {
+          console.log(`[SYNC] User ${userID} has no connected accounts, skipping sync`);
           return;
         }
 
-        // Use shared sync function
-        await syncSimpleFinDataForUser(user);
+        await Promise.all([
+          hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(),
+          hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(),
+        ]);
 
       } catch (err) {
         console.error(`[SYNC] Background sync failed for user ${userID}:`, err.message);
@@ -1082,14 +1594,14 @@ app.post("/user/sync-bg", authRequired, async (req, res, next) => {
   }
 });
 
-// Awaits the SimpleFIN sync and responds only when complete
+// Awaits the SimpleFIN and Lunch Flow sync and responds only when complete
 app.post("/user/sync", authRequired, async (req, res, next) => {
   try {
-    const userID = req.user.id;
+    const userID = req.body.userID;
 
     console.log(`[SYNC] Starting sync for user ${userID}`);
 
-    // Get user's access URL
+    // Get user's credentials for all connected services
     const user = await queryWithRetry(async (pool) => {
       const result = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
@@ -1098,30 +1610,36 @@ app.post("/user/sync", authRequired, async (req, res, next) => {
             id,
             simpleFinAccessURLData,
             simpleFinAccessURLIV,
-            simpleFinAccessURLTag
+            simpleFinAccessURLTag,
+            lunchFlowAPIKeyData,
+            lunchFlowAPIKeyIV,
+            lunchFlowAPIKeyTag
           FROM Users
           WHERE id = @userID
-            AND simpleFinAccessURLData IS NOT NULL
-            AND simpleFinAccessURLIV IS NOT NULL
-            AND simpleFinAccessURLTag IS NOT NULL
         `);
       return result.recordset[0];
     });
 
-    if (!user) {
+    const hasSimpleFin = user?.simpleFinAccessURLData && user?.simpleFinAccessURLIV && user?.simpleFinAccessURLTag;
+    const hasLunchFlow = user?.lunchFlowAPIKeyData && user?.lunchFlowAPIKeyIV && user?.lunchFlowAPIKeyTag;
+
+    if (!hasSimpleFin && !hasLunchFlow) {
       return res.json({
         success: false,
-        message: "No SimpleFin connection found for user"
+        message: "No connected accounts found for user"
       });
     }
 
-    // Await the sync before responding
-    const stats = await syncSimpleFinDataForUser(user);
+    // Run all available syncs in parallel
+    const [simpleFinStats, lunchFlowStats] = await Promise.all([
+      hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(null),
+      hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(null),
+    ]);
 
     res.json({
       success: true,
       message: "Sync complete",
-      stats
+      stats: { simpleFin: simpleFinStats, lunchFlow: lunchFlowStats }
     });
 
   } catch (err) {
@@ -1145,7 +1663,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           ORDER BY createdAt DESC
         `);
 
-      // Fetch transactions (only for Credit accounts to keep response size manageable)
+      // Fetch transactions
       const transactionsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
@@ -1162,6 +1680,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           FROM Transactions t
           INNER JOIN Accounts a ON t.accountID = a.id
           WHERE t.userID = @userID
+            AND t.transactionDate >= DATEADD(day, -30, SYSUTCDATETIME())
           ORDER BY t.transactionDate DESC, t.createdAt DESC
         `);
 
@@ -1175,7 +1694,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           ORDER BY createdAt ASC
         `);
 
-      // Fetch user info (including SimpleFin connection status)
+      // Fetch user info (including SimpleFin and Lunch Flow connection status)
       const userResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
@@ -1186,6 +1705,10 @@ app.get("/user/data", authRequired, async (req, res, next) => {
               WHEN simpleFinAccessURLData IS NOT NULL THEN 1 
               ELSE 0 
             END AS simpleFINConnected,
+            CASE 
+              WHEN lunchFlowAPIKeyData IS NOT NULL THEN 1 
+              ELSE 0 
+            END AS lunchFlowConnected,
             createdAt, 
             updatedAt
           FROM Users
