@@ -18,7 +18,7 @@ jobs:
 
           while true; do
             # Call the endpoint, capture body and HTTP code
-            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://debitmycredit.azurewebsites.net/internal/sync-simplefin-data \
+            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://debitmycredit.azurewebsites.net/internal/sync-connected-bank-data \
               -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
               -H "Content-Type: application/json" \
               -d '{"userID": "ALL"}')
