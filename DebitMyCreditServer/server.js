@@ -1253,7 +1253,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
                   accountType, createdAt, updatedAt
                 )
                 VALUES (
-                  @id, @userID, @name, @bank, @accountNumber, @availableBalance, balance, @balanceDate,
+                  @id, @userID, @name, @bank, @accountNumber, @availableBalance, @balance, @balanceDate,
                   'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
                 )
               END
