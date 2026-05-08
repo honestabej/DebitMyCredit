@@ -222,14 +222,14 @@ async function syncSimpleFinDataForUser(user) {
 
     try {
       for (const account of accounts) {
-        // Get the user's account from DB to check if it exists
+        // Get the user's account from DB to check if it exists (lookup by externalID + userID)
         const existingAccountQuery = await new sql.Request(transaction)
-          .input("accountId", sql.VarChar(100), account.id)
+          .input("externalId", sql.VarChar(100), account.id)
           .input("userId", sql.UniqueIdentifier, user.id)
           .query(`
-            SELECT id, balance, availableBalance
+            SELECT internalID, balance, availableBalance
             FROM Accounts
-            WHERE id = @accountId AND userID = @userId
+            WHERE externalID = @externalId AND userID = @userId
           `);
 
         // Convert the format of balance, available-balance, and balance-date
@@ -239,16 +239,20 @@ async function syncSimpleFinDataForUser(user) {
           ? new Date(account["balance-date"] * 1000)
           : null;
 
-        // If account doesn't exist in our DB, add it with accountType 'N/A'
+        let accountInternalID;
+
+        // If account doesn't exist in our DB, add it with accountType '-'
         if (existingAccountQuery.recordset.length === 0) {
 
           // Extract the account number from the name
           const match = account.name.match(/\((\d+)\)/);
-          const accountNumber = match ? match[1] : null;              
+          const accountNumber = match ? match[1] : null;
           const cleanedName = account.name.replace(/\s*\(\d+\)/, "").trim();
+          accountInternalID = uuidv4();
 
           await new sql.Request(transaction)
-            .input("id", sql.VarChar(100), account.id)
+            .input("internalID", sql.UniqueIdentifier, accountInternalID)
+            .input("externalID", sql.VarChar(100), account.id)
             .input("userID", sql.UniqueIdentifier, user.id)
             .input("accountSource", sql.NVarChar(255), "SimpleFIN")
             .input("name", sql.NVarChar(255), cleanedName)
@@ -257,21 +261,21 @@ async function syncSimpleFinDataForUser(user) {
             .input("availableBalance", sql.Decimal(18, 2), availableBalance)
             .input("balance", sql.Decimal(18, 2), balance)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
-            .input("accountType", sql.VarChar(50), 'N/A')
+            .input("accountType", sql.VarChar(50), '-')
             .query(`
               INSERT INTO Accounts (
-                id, userID, name, bank, accountSource, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt
+                internalID, externalID, userID, name, bank, accountSource, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt
               )
               VALUES (
-                @id, @userID, @name, @bank, @accountSource, @accountNumber, @availableBalance, @balance, @balanceDate, @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
+                @internalID, @externalID, @userID, @name, @bank, @accountSource, @accountNumber, @availableBalance, @balance, @balanceDate, @accountType, SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
 
           accountsAdded++;
         } else {
+          accountInternalID = existingAccountQuery.recordset[0].internalID;
           await new sql.Request(transaction)
-            .input("accountId", sql.VarChar(100), account.id)
-            .input("userId", sql.UniqueIdentifier, user.id)
+            .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
             .input("availableBalance", sql.Decimal(18, 2), availableBalance)
             .input("balance", sql.Decimal(18, 2), balance)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
@@ -281,7 +285,7 @@ async function syncSimpleFinDataForUser(user) {
                   balance = @balance,
                   balanceDate = @balanceDate,
                   updatedAt = SYSUTCDATETIME()
-              WHERE id = @accountId AND userID = @userId
+              WHERE internalID = @accountInternalID
             `);
           accountsUpdated++;
         }
@@ -294,40 +298,40 @@ async function syncSimpleFinDataForUser(user) {
         if (balanceChanged) {
           await new sql.Request(transaction)
             .input("id", sql.UniqueIdentifier, uuidv4())
-            .input("accountID", sql.VarChar(100), account.id)
+            .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
             .input("availableBalance", sql.Decimal(18, 2), availableBalance)
             .input("balance", sql.Decimal(18, 2), balance)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .query(`
               INSERT INTO AccountBalanceHistory (
-                id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+                id, accountInternalID, availableBalance, balance, balanceDate, createdAt, updatedAt
               )
               VALUES (
-                @id, @accountID, @availableBalance, @balance, @balanceDate, SYSUTCDATETIME(), SYSUTCDATETIME()
+                @id, @accountInternalID, @availableBalance, @balance, @balanceDate, SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
         }
 
         // Insert transactions
-        const simpleFinTxnIds = account.transactions 
-          ? account.transactions.map(txn => txn.id) 
+        const simpleFinTxnIds = account.transactions
+          ? account.transactions.map(txn => txn.id)
           : [];
 
-        // Remove orphaned pending transactions
+        // Remove orphaned pending transactions (lookup by accountInternalID)
         const orphanedTxns = await new sql.Request(transaction)
-          .input("accountId", sql.VarChar(100), account.id)
+          .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
           .query(`
-            SELECT id 
-            FROM Transactions 
-            WHERE accountID = @accountId AND pending = 1
+            SELECT internalID, externalID
+            FROM Transactions
+            WHERE accountInternalID = @accountInternalID AND pending = 1
           `);
 
         for (const dbTxn of orphanedTxns.recordset) {
-          if (!simpleFinTxnIds.includes(dbTxn.id)) {
+          if (!simpleFinTxnIds.includes(dbTxn.externalID)) {
             await new sql.Request(transaction)
-              .input("txnId", sql.VarChar(100), dbTxn.id)
-              .query(`DELETE FROM Transactions WHERE id = @txnId`);
-            
+              .input("txnInternalID", sql.UniqueIdentifier, dbTxn.internalID)
+              .query(`DELETE FROM Transactions WHERE internalID = @txnInternalID`);
+
             pendingTransactionsRemoved++;
           }
         }
@@ -336,8 +340,8 @@ async function syncSimpleFinDataForUser(user) {
         if (account.transactions) {
           for (const txn of account.transactions) {
             const existingTxn = await new sql.Request(transaction)
-              .input("txnId", sql.VarChar(100), txn.id)
-              .query(`SELECT id, pending FROM Transactions WHERE id = @txnId`);
+              .input("txnExternalId", sql.VarChar(100), txn.id)
+              .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId`);
 
             const txnDate = txn.posted
               ? new Date(txn.posted * 1000)
@@ -346,8 +350,9 @@ async function syncSimpleFinDataForUser(user) {
             if (existingTxn.recordset.length === 0) {
               // Insert new transaction
               await new sql.Request(transaction)
-                .input("id", sql.VarChar(100), txn.id)
-                .input("accountId", sql.VarChar(100), account.id)
+                .input("internalID", sql.UniqueIdentifier, uuidv4())
+                .input("externalID", sql.VarChar(100), txn.id)
+                .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
                 .input("userID", sql.UniqueIdentifier, user.id)
                 .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
                 .input("name", sql.NVarChar(500), txn.payee || 'Unknown')
@@ -356,11 +361,11 @@ async function syncSimpleFinDataForUser(user) {
                 .input("pending", sql.Bit, txn.pending || false)
                 .query(`
                   INSERT INTO Transactions (
-                    id, accountID, userID, amount, name, notes,
+                    internalID, externalID, accountInternalID, userID, amount, name, notes,
                     transactionDate, pending, createdAt, updatedAt
                   )
                   VALUES (
-                    @id, @accountId, @userID, @amount, @name, @notes,
+                    @internalID, @externalID, @accountInternalID, @userID, @amount, @name, @notes,
                     @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
                   )
                 `);
@@ -373,7 +378,7 @@ async function syncSimpleFinDataForUser(user) {
 
               if (existingPending !== newPending) {
                 await new sql.Request(transaction)
-                  .input("txnId", sql.VarChar(100), txn.id)
+                  .input("txnInternalID", sql.UniqueIdentifier, existingTxn.recordset[0].internalID)
                   .input("pending", sql.Bit, newPending)
                   .input("transactionDate", sql.DateTimeOffset, txnDate)
                   .query(`
@@ -381,7 +386,7 @@ async function syncSimpleFinDataForUser(user) {
                     SET pending = @pending,
                         transactionDate = @transactionDate,
                         updatedAt = SYSUTCDATETIME()
-                    WHERE id = @txnId
+                    WHERE internalID = @txnInternalID
                   `);
               }
             }
@@ -481,19 +486,24 @@ async function syncLunchFlowDataForUser(user) {
           0;
         const balance = parseFloat(rawBalance?.amount ?? rawBalance) || 0;
 
+        // Lookup by externalID + userID
         const existingAccountQuery = await new sql.Request(transaction)
-          .input("accountId", sql.VarChar(100), String(account.id))
+          .input("externalId", sql.VarChar(100), String(account.id))
           .input("userId", sql.UniqueIdentifier, user.id)
           .query(`
-            SELECT id, balance, availableBalance
+            SELECT internalID, balance, availableBalance
             FROM Accounts
-            WHERE id = @accountId AND userID = @userId
+            WHERE externalID = @externalId AND userID = @userId
           `);
+
+        let accountInternalID;
 
         if (existingAccountQuery.recordset.length === 0) {
           // Insert new account
+          accountInternalID = uuidv4();
           await new sql.Request(transaction)
-            .input("id", sql.VarChar(100), String(account.id))
+            .input("internalID", sql.UniqueIdentifier, accountInternalID)
+            .input("externalID", sql.VarChar(100), String(account.id))
             .input("userID", sql.UniqueIdentifier, user.id)
             .input("name", sql.NVarChar(255), account.name || "Unnamed")
             .input("bank", sql.NVarChar(255), account.institution_name || null)
@@ -501,29 +511,29 @@ async function syncLunchFlowDataForUser(user) {
             .input("availableBalance", sql.Decimal(18, 2), balance)
             .query(`
               INSERT INTO Accounts (
-                id, userID, name, bank, accountSource,
+                internalID, externalID, userID, name, bank, accountSource,
                 availableBalance, balance, balanceDate,
                 accountType, createdAt, updatedAt
               )
               VALUES (
-                @id, @userID, @name, @bank, 'Lunch Flow',
+                @internalID, @externalID, @userID, @name, @bank, 'Lunch Flow',
                 @availableBalance, @balance, SYSUTCDATETIME(),
-                'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
+                '-', SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
 
           // Record initial balance history
           await new sql.Request(transaction)
             .input("id", sql.UniqueIdentifier, uuidv4())
-            .input("accountID", sql.VarChar(100), String(account.id))
+            .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
             .input("balance", sql.Decimal(18, 2), balance)
             .input("availableBalance", sql.Decimal(18, 2), balance)
             .query(`
               INSERT INTO AccountBalanceHistory (
-                id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+                id, accountInternalID, availableBalance, balance, balanceDate, createdAt, updatedAt
               )
               VALUES (
-                @id, @accountID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
+                @id, @accountInternalID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
               )
             `);
 
@@ -531,6 +541,7 @@ async function syncLunchFlowDataForUser(user) {
 
         } else {
           // Update existing account
+          accountInternalID = existingAccountQuery.recordset[0].internalID;
           const existing = existingAccountQuery.recordset[0];
           const balanceChanged =
             parseFloat(existing.balance) !== balance ||
@@ -538,8 +549,7 @@ async function syncLunchFlowDataForUser(user) {
 
           if (balanceChanged) {
             await new sql.Request(transaction)
-              .input("accountId", sql.VarChar(100), String(account.id))
-              .input("userId", sql.UniqueIdentifier, user.id)
+              .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
               .input("balance", sql.Decimal(18, 2), balance)
               .input("availableBalance", sql.Decimal(18, 2), balance)
               .query(`
@@ -548,26 +558,25 @@ async function syncLunchFlowDataForUser(user) {
                     availableBalance = @availableBalance,
                     balanceDate = SYSUTCDATETIME(),
                     updatedAt = SYSUTCDATETIME()
-                WHERE id = @accountId AND userID = @userId
+                WHERE internalID = @accountInternalID
               `);
 
             await new sql.Request(transaction)
               .input("id", sql.UniqueIdentifier, uuidv4())
-              .input("accountID", sql.VarChar(100), String(account.id))
+              .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
               .input("balance", sql.Decimal(18, 2), balance)
               .input("availableBalance", sql.Decimal(18, 2), balance)
               .query(`
                 INSERT INTO AccountBalanceHistory (
-                  id, accountID, availableBalance, balance, balanceDate, createdAt, updatedAt
+                  id, accountInternalID, availableBalance, balance, balanceDate, createdAt, updatedAt
                 )
                 VALUES (
-                  @id, @accountID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
+                  @id, @accountInternalID, @availableBalance, @balance, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME()
                 )
               `);
           } else {
             await new sql.Request(transaction)
-              .input("accountId", sql.VarChar(100), String(account.id))
-              .input("userId", sql.UniqueIdentifier, user.id)
+              .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
               .input("balance", sql.Decimal(18, 2), balance)
               .input("availableBalance", sql.Decimal(18, 2), balance)
               .query(`
@@ -575,7 +584,7 @@ async function syncLunchFlowDataForUser(user) {
                 SET balance = @balance,
                     availableBalance = @availableBalance,
                     updatedAt = SYSUTCDATETIME()
-                WHERE id = @accountId AND userID = @userId
+                WHERE internalID = @accountInternalID
               `);
           }
 
@@ -588,18 +597,18 @@ async function syncLunchFlowDataForUser(user) {
 
         // Remove orphaned pending transactions no longer in the Lunch Flow response
         const orphanedTxns = await new sql.Request(transaction)
-          .input("accountId", sql.VarChar(100), String(account.id))
+          .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
           .query(`
-            SELECT id
+            SELECT internalID, externalID
             FROM Transactions
-            WHERE accountID = @accountId AND pending = 1
+            WHERE accountInternalID = @accountInternalID AND pending = 1
           `);
 
         for (const dbTxn of orphanedTxns.recordset) {
-          if (!lfTxnIds.includes(dbTxn.id)) {
+          if (!lfTxnIds.includes(dbTxn.externalID)) {
             await new sql.Request(transaction)
-              .input("txnId", sql.VarChar(100), dbTxn.id)
-              .query(`DELETE FROM Transactions WHERE id = @txnId`);
+              .input("txnInternalID", sql.UniqueIdentifier, dbTxn.internalID)
+              .query(`DELETE FROM Transactions WHERE internalID = @txnInternalID`);
 
             pendingTransactionsRemoved++;
           }
@@ -609,18 +618,19 @@ async function syncLunchFlowDataForUser(user) {
         for (const txn of lfTxns) {
           if (!txn.id) continue;
 
-          const txnId = String(txn.id);
+          const txnExternalId = String(txn.id);
           const txnDate = txn.date ? new Date(txn.date) : new Date();
           const isPending = txn.isPending || false;
 
           const existingTxn = await new sql.Request(transaction)
-            .input("txnId", sql.VarChar(100), txnId)
-            .query(`SELECT id, pending FROM Transactions WHERE id = @txnId`);
+            .input("txnExternalId", sql.VarChar(100), txnExternalId)
+            .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId`);
 
           if (existingTxn.recordset.length === 0) {
             await new sql.Request(transaction)
-              .input("id", sql.VarChar(100), txnId)
-              .input("accountId", sql.VarChar(100), String(account.id))
+              .input("internalID", sql.UniqueIdentifier, uuidv4())
+              .input("externalID", sql.VarChar(100), txnExternalId)
+              .input("accountInternalID", sql.UniqueIdentifier, accountInternalID)
               .input("userID", sql.UniqueIdentifier, user.id)
               .input("amount", sql.Decimal(18, 2), parseFloat(txn.amount) || 0)
               .input("name", sql.NVarChar(500), txn.merchant || "Unknown")
@@ -629,11 +639,11 @@ async function syncLunchFlowDataForUser(user) {
               .input("pending", sql.Bit, isPending)
               .query(`
                 INSERT INTO Transactions (
-                  id, accountID, userID, amount, name, notes,
+                  internalID, externalID, accountInternalID, userID, amount, name, notes,
                   transactionDate, pending, createdAt, updatedAt
                 )
                 VALUES (
-                  @id, @accountId, @userID, @amount, @name, @notes,
+                  @internalID, @externalID, @accountInternalID, @userID, @amount, @name, @notes,
                   @transactionDate, @pending, SYSUTCDATETIME(), SYSUTCDATETIME()
                 )
               `);
@@ -645,7 +655,7 @@ async function syncLunchFlowDataForUser(user) {
 
             if (existingPending !== isPending) {
               await new sql.Request(transaction)
-                .input("txnId", sql.VarChar(100), txnId)
+                .input("txnInternalID", sql.UniqueIdentifier, existingTxn.recordset[0].internalID)
                 .input("pending", sql.Bit, isPending)
                 .input("transactionDate", sql.DateTimeOffset, txnDate)
                 .query(`
@@ -653,7 +663,7 @@ async function syncLunchFlowDataForUser(user) {
                   SET pending = @pending,
                       transactionDate = @transactionDate,
                       updatedAt = SYSUTCDATETIME()
-                  WHERE id = @txnId
+                  WHERE internalID = @txnInternalID
                 `);
             }
           }
@@ -1213,7 +1223,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
             WHERE id = @userID
           `);
 
-        // Upsert accounts
+        // Upsert accounts (MERGE on externalID + userID to support multiple users connecting to the same bank account)
         for (const account of accounts) {
           // Format the balance-date correctly
           const balanceDate = account["balance-date"]
@@ -1222,11 +1232,11 @@ app.post("/connect-simplefin", async (req, res, next) => {
 
           // Extract the account number from the name
           const match = account.name.match(/\((\d+)\)/);
-          const accountNumber = match ? match[1] : null;              
+          const accountNumber = match ? match[1] : null;
           const cleanedName = account.name.replace(/\s*\(\d+\)/, "").trim();
 
           await new sql.Request(transaction)
-            .input("id", sql.VarChar(100), account.id)
+            .input("externalID", sql.VarChar(100), account.id)
             .input("userID", sql.UniqueIdentifier, userID)
             .input("name", sql.NVarChar(255), cleanedName)
             .input("bank", sql.NVarChar(255), account.org?.name || null)
@@ -1235,28 +1245,20 @@ app.post("/connect-simplefin", async (req, res, next) => {
             .input("balance", sql.Decimal(18, 2), parseFloat(account["balance"]) || 0)
             .input("balanceDate", sql.DateTimeOffset, balanceDate)
             .query(`
-              -- Update the account if it already exists
-              UPDATE Accounts
-              SET bank = @bank,
+              MERGE Accounts WITH (HOLDLOCK) AS target
+              USING (SELECT @externalID AS externalID, @userID AS userID) AS source
+                ON target.externalID = source.externalID AND target.userID = source.userID
+              WHEN MATCHED THEN
+                UPDATE SET
+                  bank = @bank,
                   accountNumber = @accountNumber,
                   availableBalance = @availableBalance,
                   balance = @balance,
                   balanceDate = @balanceDate,
                   updatedAt = SYSUTCDATETIME()
-              WHERE id = @id AND userID = @userID;
-
-              -- If the account did not exist, insert new account with type 'N/A'
-              IF @@ROWCOUNT = 0
-              BEGIN
-                INSERT INTO Accounts (
-                  id, userID, name, bank, accountNumber, availableBalance, balance, balanceDate,
-                  accountType, createdAt, updatedAt
-                )
-                VALUES (
-                  @id, @userID, @name, @bank, @accountNumber, @availableBalance, @balance, @balanceDate,
-                  'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
-                )
-              END
+              WHEN NOT MATCHED THEN
+                INSERT (internalID, externalID, userID, name, bank, accountSource, accountNumber, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt)
+                VALUES (NEWID(), @externalID, @userID, @name, @bank, 'SimpleFIN', @accountNumber, @availableBalance, @balance, @balanceDate, '-', SYSUTCDATETIME(), SYSUTCDATETIME());
             `);
         }
 
@@ -1265,7 +1267,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
         // After all updates, fetch all accounts for this user
         const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
-            .query(`SELECT id, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+            .query(`SELECT internalID AS id, externalID, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
 
         // Return the accounts data
         return result.recordset;
@@ -1311,7 +1313,15 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
               updatedAt = SYSUTCDATETIME()
           WHERE id = @userID
         `);
-      
+
+      // Delete accounts associated with SimpleFIN
+      await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          DELETE FROM Accounts
+          WHERE userID = @userID AND accountSource = 'SimpleFIN'
+        `);
+
       return { rowsAffected: updateResult.rowsAffected[0] };
     });
     
@@ -1423,39 +1433,31 @@ app.post("/connect-lunchflow", async (req, res, next) => {
             WHERE id = @userID
           `);
 
-        // Upsert accounts
+        // Upsert accounts (MERGE on externalID + userID to support multiple users per bank account)
         for (const account of accounts) {
           const cleanedName = account.name || "Unnamed";
 
           await new sql.Request(transaction)
-            .input("id", sql.VarChar(100), String(account.id))
+            .input("externalID", sql.VarChar(100), String(account.id))
             .input("userID", sql.UniqueIdentifier, userID)
             .input("name", sql.NVarChar(255), cleanedName)
             .input("bank", sql.NVarChar(255), account.institution_name || null)
-            .input("availableBalance", sql.Decimal(18, 2), parseFloat(account.availableBalance.amount) || 0)
-            .input("balance", sql.Decimal(18, 2), parseFloat(account.balance.amount) || 0)
+            .input("availableBalance", sql.Decimal(18, 2), parseFloat(account.availableBalance?.amount ?? account.availableBalance) || 0)
+            .input("balance", sql.Decimal(18, 2), parseFloat(account.balance?.amount ?? account.balance) || 0)
             .query(`
-              UPDATE Accounts
-              SET bank = @bank,
+              MERGE Accounts WITH (HOLDLOCK) AS target
+              USING (SELECT @externalID AS externalID, @userID AS userID) AS source
+                ON target.externalID = source.externalID AND target.userID = source.userID
+              WHEN MATCHED THEN
+                UPDATE SET
+                  bank = @bank,
                   availableBalance = @availableBalance,
                   balance = @balance,
                   balanceDate = SYSUTCDATETIME(),
                   updatedAt = SYSUTCDATETIME()
-              WHERE id = @id AND userID = @userID;
-
-              IF @@ROWCOUNT = 0
-              BEGIN
-                INSERT INTO Accounts (
-                  id, userID, name, bank, accountSource,
-                  availableBalance, balance, balanceDate,
-                  accountType, createdAt, updatedAt
-                )
-                VALUES (
-                  @id, @userID, @name, @bank, 'Lunch Flow',
-                  @availableBalance, @balance, SYSUTCDATETIME(),
-                  'N/A', SYSUTCDATETIME(), SYSUTCDATETIME()
-                )
-              END
+              WHEN NOT MATCHED THEN
+                INSERT (internalID, externalID, userID, name, bank, accountSource, availableBalance, balance, balanceDate, accountType, createdAt, updatedAt)
+                VALUES (NEWID(), @externalID, @userID, @name, @bank, 'Lunch Flow', @availableBalance, @balance, SYSUTCDATETIME(), '-', SYSUTCDATETIME(), SYSUTCDATETIME());
             `);
         }
 
@@ -1464,7 +1466,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
         const result = await pool.request()
           .input("userID", sql.UniqueIdentifier, userID)
           .query(`
-            SELECT id, name, bank, accountSource,
+            SELECT internalID AS id, externalID, name, bank, accountSource,
                    availableBalance, balance,
                    accountType, createdAt, updatedAt
             FROM Accounts
@@ -1515,7 +1517,15 @@ app.post("/disconnect-lunchflow", async (req, res, next) => {
               updatedAt = SYSUTCDATETIME()
           WHERE id = @userID
         `);
-      
+
+      // Delete accounts associated with Lunch Flow
+      await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          DELETE FROM Accounts
+          WHERE userID = @userID AND accountSource = 'Lunch Flow'
+        `);
+
       return { rowsAffected: updateResult.rowsAffected[0] };
     });
     
@@ -1669,7 +1679,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const accountsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
+          SELECT internalID AS id, externalID, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1680,8 +1690,9 @@ app.get("/user/data", authRequired, async (req, res, next) => {
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
           SELECT
-            t.id,
-            t.accountID,
+            t.internalID AS id,
+            t.externalID,
+            t.accountInternalID AS accountID,
             t.amount,
             t.name,
             t.notes,
@@ -1690,7 +1701,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
             t.createdAt,
             t.updatedAt
           FROM Transactions t
-          INNER JOIN Accounts a ON t.accountID = a.id
+          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
           WHERE t.userID = @userID
             AND t.transactionDate >= DATEADD(day, -30, SYSUTCDATETIME())
           ORDER BY t.transactionDate DESC, t.createdAt DESC
@@ -1754,7 +1765,7 @@ app.get("/accounts", authRequired, async (req, res, next) => {
       const result = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
+          SELECT internalID AS id, externalID, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
           FROM Accounts
           WHERE userID = @userID
           ORDER BY createdAt DESC
@@ -1837,7 +1848,7 @@ app.post("/update/accounts", authRequired, async (req, res, next) => {
       try {
         for (const account of clientAccounts) {
           await new sql.Request(transaction)
-            .input("accountId", sql.VarChar(100), account.id)
+            .input("accountInternalID", sql.UniqueIdentifier, account.id)
             .input("userId", sql.UniqueIdentifier, userID)
             .input("name", sql.NVarChar(255), account.name)
             .input("accountType", sql.VarChar(50), account.accountType)
@@ -1846,7 +1857,7 @@ app.post("/update/accounts", authRequired, async (req, res, next) => {
               SET name = @name,
                   accountType = @accountType,
                   updatedAt = SYSUTCDATETIME()
-              WHERE id = @accountId AND userID = @userId
+              WHERE internalID = @accountInternalID AND userID = @userId
             `);
 
           accountsUpdated++;
