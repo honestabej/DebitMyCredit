@@ -1040,17 +1040,19 @@ app.post("/register", async (req, res, next) => {
 
     // Handle the result OUTSIDE the wrapper
     if (result.emailExists) {
-      return res.status(409).json({ 
-        success: false, 
-        error: "Email already exists" 
+      console.log(`[REGISTER] Registration failed - email already exists: ${email}`);
+      return res.status(409).json({
+        success: false,
+        error: "Email already exists"
       });
     }
 
     // Generate JWT
     const token = jwt.sign({ id: result.user.id, email: result.user.email }, JWT_SECRET);
 
-    res.json({ 
-      success: true, 
+    console.log(`[REGISTER] New user registered: ${result.user.id} (${email})`);
+    res.json({
+      success: true,
       message: `New user registered`,
       token,
       user: result.user
@@ -1137,8 +1139,8 @@ app.post("/login", async (req, res, next) => {
 app.post("/connect-simplefin", async (req, res, next) => {
   try {
     // Get id and token from user
-    const { userID, setupToken } = req.body;
-    if (!userID || !setupToken) return res.status(400).json({ 
+    const { userID, credential } = req.body;
+    if (!userID || !credential) return res.status(400).json({
       success: false,
       message: "userID and setup token required",
       accounts: null
@@ -1147,7 +1149,7 @@ app.post("/connect-simplefin", async (req, res, next) => {
     // Decode setup token into claim url
     let claimUrl;
     try {
-      claimUrl = Buffer.from(setupToken, "base64").toString("utf-8");
+      claimUrl = Buffer.from(credential, "base64").toString("utf-8");
     } catch {
       return res.status(400).json({
         success: false,
@@ -1335,8 +1337,8 @@ app.post("/disconnect-simplefin", async (req, res, next) => {
 app.post("/connect-lunchflow", async (req, res, next) => {
   try {
     // Get id and api key from user
-    const { userID, apiKey } = req.body;
-    if (!userID || !apiKey) return res.status(400).json({ 
+    const { userID, credential } = req.body;
+    if (!userID || !credential) return res.status(400).json({ 
       success: false,
       message: "userID and api key required",
       accounts: null
@@ -1348,7 +1350,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
     const lfResponse = await fetch(`${lunchFlowBaseURL}/accounts`, {
       method: "GET",
       headers: {
-        "x-api-key": apiKey
+        "x-api-key": credential
       }
     });
 
@@ -1364,7 +1366,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
       fetch(`${lunchFlowBaseURL}/accounts/${account.id}/balance`, {
         method: "GET",
         headers: {
-          "x-api-key": apiKey
+          "x-api-key": credential
         }
       })
       .then(res => {
@@ -1399,7 +1401,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
     }
 
     // Encrypt the api key before storing it in the database
-    const accessEnc = encrypt(apiKey);
+    const accessEnc = encrypt(credential);
     
     const userAccounts = await queryWithRetry(async (pool) => {
       const transaction = new sql.Transaction(pool);
