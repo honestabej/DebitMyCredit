@@ -1267,7 +1267,9 @@ app.post("/connect-simplefin", async (req, res, next) => {
         // After all updates, fetch all accounts for this user
         const result = await pool.request()
             .input("userID", sql.UniqueIdentifier, userID)
-            .query(`SELECT internalID AS id, externalID, name, bank, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt FROM Accounts WHERE userID = @userID`);
+            .query(`SELECT 
+              internalID AS id, externalID, name, bank, accountSource, accountNumber, availableBalance, balance, accountType, balanceDate, createdAt 
+              FROM Accounts WHERE userID = @userID AND accountSource = 'SimpleFIN'`);
 
         // Return the accounts data
         return result.recordset;
@@ -1470,7 +1472,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
                    availableBalance, balance,
                    accountType, createdAt, updatedAt
             FROM Accounts
-            WHERE userID = @userID
+            WHERE userID = @userID AND accountSource = 'Lunch Flow'
           `);
 
         return result.recordset;
@@ -1485,7 +1487,7 @@ app.post("/connect-lunchflow", async (req, res, next) => {
     return res.json({
       success: true,
       message: "Lunch Flow connected successfully",
-      accounts: accounts
+      accounts: userAccounts
 
     });
 
