@@ -1549,6 +1549,130 @@ app.post("/disconnect-lunchflow", async (req, res, next) => {
   } 
 });
 
+// Add a new manual account
+app.post("/add-manual-account", async (req, res, next) => {
+  try {
+    const { userID, name, balance, bank, accountNumber, availableBalance, accountType, createdAt, updatedAt } = req.body;
+
+    if (!userID || !name || balance === undefined || !createdAt || !updatedAt) {
+      return res.status(400).json({
+        success: false,
+        message: "userID, name, balance, createdAt, and updatedAt are required"
+      });
+    }
+
+    const account = await queryWithRetry(async (pool) => {
+      const internalID = uuidv4();
+      const externalID = internalID; // No external source for manual accounts
+      const resolvedAvailableBalance = availableBalance ?? balance;
+
+      await pool.request()
+        .input("internalID", sql.UniqueIdentifier, internalID)
+        .input("externalID", sql.VarChar(100), externalID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("name", sql.NVarChar(255), name)
+        .input("bank", sql.NVarChar(255), bank || null)
+        .input("accountNumber", sql.Char(6), accountNumber || null)
+        .input("balance", sql.Decimal(18, 2), balance)
+        .input("availableBalance", sql.Decimal(18, 2), resolvedAvailableBalance)
+        .input("accountType", sql.VarChar(50), accountType || null)
+        .input("createdAt", sql.DateTimeOffset, createdAt)
+        .input("updatedAt", sql.DateTimeOffset, updatedAt)
+        .query(`
+          INSERT INTO Accounts (
+            internalID, externalID, userID, name, bank, accountSource,
+            accountNumber, availableBalance, balance, balanceDate,
+            accountType, createdAt, updatedAt
+          )
+          VALUES (
+            @internalID, @externalID, @userID, @name, @bank, 'Manual',
+            @accountNumber, @availableBalance, @balance, @createdAt,
+            @accountType, @createdAt, @updatedAt
+          )
+        `);
+
+      // Record initial balance history
+      await pool.request()
+        .input("id", sql.UniqueIdentifier, uuidv4())
+        .input("accountInternalID", sql.UniqueIdentifier, internalID)
+        .input("balance", sql.Decimal(18, 2), balance)
+        .input("availableBalance", sql.Decimal(18, 2), resolvedAvailableBalance)
+        .input("createdAt", sql.DateTimeOffset, createdAt)
+        .input("updatedAt", sql.DateTimeOffset, updatedAt)
+        .query(`
+          INSERT INTO AccountBalanceHistory (
+            id, accountInternalID, availableBalance, balance, balanceDate, createdAt, updatedAt
+          )
+          VALUES (
+            @id, @accountInternalID, @availableBalance, @balance, @createdAt, @createdAt, @updatedAt
+          )
+        `);
+
+      // Return the newly created account
+      const result = await pool.request()
+        .input("internalID", sql.UniqueIdentifier, internalID)
+        .query(`
+          SELECT internalID AS id, externalID, name, bank, accountSource,
+                 accountNumber, availableBalance, balance, accountType, balanceDate, createdAt, updatedAt
+          FROM Accounts
+          WHERE internalID = @internalID
+        `);
+
+      return result.recordset[0];
+    });
+
+    res.json({
+      success: true,
+      message: "Manual account created",
+      account
+    });
+
+  } catch (err) {
+    next(err);
+  }
+})
+
+// Delete a manual account
+app.post("/delete-manual-account", async (req, res, next) => {
+  try {
+    const { userID, accountID } = req.body;
+
+    if (!userID || !accountID) {
+      return res.status(400).json({
+        success: false,
+        message: "userID and accountID are required"
+      });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      const deleteResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("accountID", sql.UniqueIdentifier, accountID)
+        .query(`
+          DELETE FROM Accounts
+          WHERE internalID = @accountID AND userID = @userID AND accountSource = 'Manual'
+        `);
+
+      return { rowsAffected: deleteResult.rowsAffected[0] };
+    });
+
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found or not a manual account"
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Manual account deleted"
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Trigger background sync for the authenticated user
 // Responds immediately and runs the sync in the background (fire and forget)
 app.post("/user/sync-bg", authRequired, async (req, res, next) => {
