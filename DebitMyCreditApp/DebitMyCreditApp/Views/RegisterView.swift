@@ -211,13 +211,10 @@ struct RegisterView: View {
                 
             } catch let error as APIError {
                 await MainActor.run {
-                    // Show retry message for server sleep
                     if error == .dbAsleep {
+                        // Show retry message but keep spinner going while APIService retries
                         loadingMessage = "Waking DB, retrying..."
-                    }
-                    
-                    // Only show error if not retrying
-                    if !isLoading {
+                    } else {
                         errorMessage = error.localizedDescription
                         isLoading = false
                     }

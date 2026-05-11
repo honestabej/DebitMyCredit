@@ -30,7 +30,8 @@ struct TransactionsView: View {
     var body: some View {
         ZStack () {
             // Background gradient
-            AppGradients.horizontalGradient.ignoresSafeArea()
+//            AppGradients.horizontalGradient.ignoresSafeArea()
+            Color.appGreen.ignoresSafeArea()
             
             // White background behind tab bar
             VStack {}
@@ -38,7 +39,7 @@ struct TransactionsView: View {
                 .background(Color.white)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
                 .ignoresSafeArea(edges: .bottom)
-                .padding(.top, 70)
+                .padding(.top, 45)
             
             // Actual Content
             VStack {
@@ -47,10 +48,10 @@ struct TransactionsView: View {
                     Text("Credit Transactions")
                         .font(.system(size: 25))
                         .fontWeight(.bold)
-                        .padding(.top)
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.white)
+                        .padding(.top, 3)
                     
                     // Dont show refresh button if a refresh is currently taking place
                     if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
@@ -63,15 +64,15 @@ struct TransactionsView: View {
                                     .font(.system(size: 18, weight: .semibold))
                                     .foregroundColor(.white)
                             }
-                            .padding(.top)
                             .padding(.trailing, 20)
+                            .padding(.top, 3)
                         }
                     }
                 }
                 
                     
                 
-                Spacer().frame(height: 37)
+                Spacer().frame(height: 40)
                 
                 HStack {
                     Text("Card: ")
@@ -418,86 +419,17 @@ struct TransactionRow: View {
 
 
 
-#Preview {
-    let controller = PersistenceController(inMemory: true)
-    let context = controller.container.viewContext
-
-    let account = Account(context: context)
-    account.id = UUID().uuidString
-    account.name = "Chase Sapphire"
-    account.bank = "Chase"
-    account.accountType = "Credit"
-    account.accountNumber = "1234"
-    account.accountColor = CoreDataService.randomAccountColor()
-    
-    // Checking Account being viewed
-    let dbtAcct = Account(context: context)
-    dbtAcct.id = "dbt-1"
-    dbtAcct.name = "Abe's Checking"
-    dbtAcct.bank = "Wells Fargo"
-    dbtAcct.accountType = "Debit"
-    dbtAcct.accountNumber = "1234"
-    dbtAcct.availableBalance = NSDecimalNumber(value: 1234.56)
-    dbtAcct.balanceDate = Date()
-    dbtAcct.accountColor = CoreDataService.randomAccountColor()
-    // Checking Account being viewed
-    let dbtAcct2 = Account(context: context)
-    dbtAcct2.id = "dbt-2"
-    dbtAcct2.name = "Shae's Checking"
-    dbtAcct2.bank = "Wells Fargo"
-    dbtAcct2.accountType = "Debit"
-    dbtAcct2.accountNumber = "2345"
-    dbtAcct2.availableBalance = NSDecimalNumber(value: 1234.56)
-    dbtAcct2.balanceDate = Date()
-    dbtAcct2.accountColor = CoreDataService.randomAccountColor()
-    
-    // Create a transferGroup
-    let tg1 = TransferGroup(context: context)
-    tg1.name = "82"
-
-    let tx1 = Transaction(context: context)
-    tx1.id = UUID().uuidString
-    tx1.name = "Whole Foods Market"
-    tx1.amount = -54.32
-    tx1.transactionDate = Date()
-    tx1.account = account
-
-    let tx2 = Transaction(context: context)
-    tx2.id = UUID().uuidString
-    tx2.name = "Netflix"
-    tx2.amount = -15.99
-    tx2.transactionDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    tx2.account = account
-    tx2.transferGroup = tg1
-    
-    let tx3 = Transaction(context: context)
-    tx3.id = UUID().uuidString
-    tx3.name = "McDonald's"
-    tx3.amount = -26.73
-    tx3.transactionDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    tx3.account = account
-    tx3.transferGroup = tg1
-    
-    let allo1 = TransactionAllocation(context: context)
-    allo1.transaction = tx2
-    allo1.account = dbtAcct
-    allo1.amount = tx2.amount // Full amount
-
-    let allo2 = TransactionAllocation(context: context)
-    allo2.transaction = tx3
-    allo2.account = dbtAcct
-    allo2.amount = NSDecimalNumber(value: -14.50)
-
-    let allo3 = TransactionAllocation(context: context)
-    allo3.transaction = tx3
-    allo3.account = dbtAcct2
-    allo3.amount = NSDecimalNumber(value: -12.23)
-    
-
-    try? context.save()
-
+#Preview("With Data") {
+    let context = PersistenceController.preview.container.viewContext
     return TransactionsView()
         .environment(\.managedObjectContext, context)
-        .environmentObject(AuthManager(viewContext: context))
+        .environmentObject(PersistenceController.previewAuthManager())
+}
+
+#Preview("Empty State") {
+    let context = PersistenceController.previewEmpty.container.viewContext
+    return TransactionsView()
+        .environment(\.managedObjectContext, context)
+        .environmentObject(PersistenceController.previewEmptyAuthManager())
 }
 

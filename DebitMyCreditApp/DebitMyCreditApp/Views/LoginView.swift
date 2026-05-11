@@ -141,12 +141,13 @@ struct LoginView: View {
                 let response = try await APIService.shared.login(email: email, password: password)
                 
                 // Debug logging
-                print("🔍 Swift - Response received:")
+                print("Swift - Response received:")
                 print("  ├─ success: \(response.success ?? false)")
                 print("  ├─ token: \(response.token != nil ? "Present" : "nil")")
                 print("  ├─ user.id: \(response.user?.id ?? "nil")")
                 print("  ├─ user.email: \(response.user?.email ?? "nil")")
-                print("  └─ user.simpleFINConnected: \(response.user?.simpleFINConnected ?? false)")
+                print("  ├─ user.simpleFINConnected: \(response.user?.simpleFINConnected ?? false)")
+                print("  └─ user.lunchFlowConnected: \(response.user?.lunchFlowConnected ?? false)")
                 
                 // Check for success and token
                 guard response.success == true, let token = response.token else {
@@ -159,7 +160,7 @@ struct LoginView: View {
                 
                 // Create or fetch the user in Core Data
                 await MainActor.run {
-                    let user = fetchOrCreateUser(id: response.user?.id, email: response.user?.email ?? email, simpleFINConnected: response.user?.simpleFINConnected ?? false)
+                    let user = fetchOrCreateUser(id: response.user?.id, email: response.user?.email ?? email, simpleFINConnected: response.user?.simpleFINConnected ?? false, lunchFlowConnected: response.user?.lunchFlowConnected ?? false)
                     
                     // Login with AuthManager
                     authManager.login(token: token, user: user)
@@ -193,7 +194,8 @@ struct LoginView: View {
         }
     }
     
-    private func fetchOrCreateUser(id: String?, email: String, simpleFINConnected: Bool) -> User {
+    // Creates the user object that will be used throughout the app after login
+    private func fetchOrCreateUser(id: String?, email: String, simpleFINConnected: Bool, lunchFlowConnected: Bool) -> User {
         // Try to find existing user
         let fetchRequest = User.fetchRequest()
         
@@ -205,6 +207,7 @@ struct LoginView: View {
         
         if let existingUser = try? viewContext.fetch(fetchRequest).first {
             existingUser.simpleFinCredentialsSet = simpleFINConnected
+            existingUser.lunchFlowCredentialsSet = lunchFlowConnected
             existingUser.updatedAt = Date()
             try? viewContext.save()
             return existingUser
@@ -215,6 +218,7 @@ struct LoginView: View {
         newUser.id = id.flatMap { UUID(uuidString: $0) } ?? UUID()
         newUser.email = email
         newUser.simpleFinCredentialsSet = simpleFINConnected
+        newUser.lunchFlowCredentialsSet = lunchFlowConnected
         newUser.createdAt = Date()
         newUser.updatedAt = Date()
         

@@ -115,7 +115,8 @@ class APIService {
             }
             
             guard (200...299).contains(httpResponse.statusCode) else {
-                let errorMessage = try? JSONDecoder().decode([String: String].self, from: data)["message"]
+                let errorBody = try? JSONDecoder().decode(ServerErrorBody.self, from: data)
+                let errorMessage = errorBody?.message ?? errorBody?.error
                 print("└─ HTTP Error \(httpResponse.statusCode): \(errorMessage ?? "No message")")
                 throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorMessage ?? "Unknown Server Error")
             }
@@ -161,6 +162,12 @@ class APIService {
         }
     }
     
+    // Handles mixed-type error bodies where the message may be under "message" or "error" key
+    private struct ServerErrorBody: Decodable {
+        let message: String?
+        let error: String?
+    }
+
     // MARK: - Helper Methods
     private func isDBAsleep(data: Data, statusCode: Int) -> Bool {
         // Azure may return specific messages or status codes when server is sleeping
@@ -230,15 +237,49 @@ class APIService {
     }
 
     // Connect SimpleFin Account
-    func connectSimpleFin(userID: UUID, setupToken: String) async throws -> APIModels.SimpleFINConnectionResponse {
-        let body = APIModels.SimpleFINConnectionRequest(userID: userID, setupToken: setupToken)
+    func connectSimpleFin(userID: UUID, credential: String) async throws -> APIModels.BankConnectionResponse {
+        let body = APIModels.BankConnectionRequest(userID: userID, credential: credential)
         return try await makeRequest(endpoint: "/connect-simplefin", method: .post, body: body)
     }
 
     // Disconnect a SimpleFIN account
     func disconnectSimpleFin(userID: UUID) async throws -> APIModels.GenericResponse {
-        let body = APIModels.SimpleFINDeletionRequest(userID: userID)
+        let body = APIModels.BankConnectionDeletionRequest(userID: userID)
         return try await makeRequest(endpoint: "/disconnect-simplefin", method: .post, body: body)
+    }
+    
+    // Connect Lunch Flow Account
+    func connectLunchFlow(userID: UUID, credential: String) async throws -> APIModels.BankConnectionResponse {
+        let body = APIModels.BankConnectionRequest(userID: userID, credential: credential)
+        return try await makeRequest(endpoint: "/connect-lunchflow", method: .post, body: body)
+    }
+
+    // Disconnect a Lunch Flow account
+    func disconnectLunchFlow(userID: UUID) async throws -> APIModels.GenericResponse {
+        let body = APIModels.BankConnectionDeletionRequest(userID: userID)
+        return try await makeRequest(endpoint: "/disconnect-lunchflow", method: .post, body: body)
+    }
+    
+    // Add a Manually Tracked account
+    func addManualAccount(userID: UUID, account: APIModels.Account, createdAt: String, updatedAt: String) async throws -> APIModels.AddManualAccountResponse {
+        let body = APIModels.AddManualAccountRequest(
+            userID: userID,
+            name: account.name,
+            balance: account.balance,
+            availableBalance: account.availableBalance,
+            bank: account.bank?.isEmpty == false ? account.bank : nil,
+            accountNumber: account.accountNumber,
+            accountType: account.accountType,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+        return try await makeRequest(endpoint: "/add-manual-account", method: .post, body: body)
+    }
+    
+    // Delete a Manually Tracked account
+    func deleteManualAccount(userID: UUID, accountID: UUID) async throws -> APIModels.GenericResponse {
+        let body = APIModels.ManualAccountDeletionRequest(userID: userID, accountID: accountID)
+        return try await makeRequest(endpoint: "/delete-manual-account", method: .post, body: body)
     }
 
     // Get all connected bank accounts of a user
@@ -263,172 +304,7 @@ class APIService {
     }
 
     // Trigger background sync for authenticated user
-    func syncSimpleFIN(token: String) async throws -> APIModels.SyncResponse {
+    func syncBankConnections(token: String) async throws -> APIModels.SyncResponse {
         return try await makeRequest(endpoint: "/user/sync", method: .post, token: token)
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// MARK: - Old Request Method
-//    private func request<T: Decodable & Sendable>(endpoint: String, method: HTTPMethod = .get, body: (any Encodable & Sendable)? = nil, retryCount: Int = 0, token: String? = nil) async throws -> T {
-//        let attemptLabel = retryCount == 0 ? "Initial" : "Retry #\(retryCount)"
-//        
-//        print("\n [\(attemptLabel)] API Request")
-//        print("├─ Endpoint: \(method.rawValue) \(baseURL)\(endpoint)")
-//        print("├─ Time: \(Date().formatted(date: .omitted, time: .standard))")
-//        
-//        // Build URL
-//        guard let url = URL(string: "\(baseURL)\(endpoint)") else {
-//            print("└─ Invalid URL")
-//            throw APIError.invalidURL
-//        }
-//        
-//        // Create request
-//        var urlRequest = URLRequest(url: url)
-//        urlRequest.httpMethod = method.rawValue
-//        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-//        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-//        
-//        // Add body if provided
-//        if let body = body {
-//            urlRequest.httpBody = try JSONEncoder().encode(body)
-//            print("├─ Body: Present (encoded)")
-//        }
-//        
-//        // Add authorization if provided
-//        if let token, !token.isEmpty {
-//            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-//            print("├─ Auth: Bearer token attached")
-//        }
-//        
-//        do {
-//            print("├─ Sending request...")
-//            let startTime = Date()
-//            
-//            // Perform request
-//            let (data, response) = try await session.data(for: urlRequest)
-//            
-//            let duration = Date().timeIntervalSince(startTime)
-//            print("├─ Response received in \(String(format: "%.2f", duration))s")
-//            
-//            // Validate response
-//            guard let httpResponse = response as? HTTPURLResponse else {
-//                print("└─ Invalid response type")
-//                throw APIError.invalidResponse
-//            }
-//            
-//            print("├─ Status: \(httpResponse.statusCode)")
-//            
-//            // Check for any indication that the DB may be asleep
-//            if isDBAsleep(data: data, statusCode: httpResponse.statusCode) {
-//                print("├─ DB detected as sleeping/waking")
-//                throw APIError.dbAsleep
-//            }
-//            
-//            // Check for other HTTP errors
-//            guard (200...299).contains(httpResponse.statusCode) else {
-//                let errorMessage = try? JSONDecoder().decode([String: String].self, from: data)["message"]
-//                print("└─ HTTP Error \(httpResponse.statusCode): \(errorMessage ?? "No message")")
-//                throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorMessage)
-//            }
-//            
-//            // Decode response
-//            do {
-//                let decoder = JSONDecoder()
-//                // Use default decoding - FlexibleDate will handle strings
-//                
-//                let decoded = try decoder.decode(T.self, from: data)
-//                print("└─ Success! Response decoded successfully")
-//                return decoded
-//            } catch let DecodingError.keyNotFound(key, context) {
-//                print("├─ Decoding failed: Missing key '\(key.stringValue)'")
-//                print("├─ Context: \(context.debugDescription)")
-//                print("├─ Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: " -> "))")
-//                print("└─ Raw response: \(String(data: data, encoding: .utf8) ?? "Unable to read")")
-//                throw APIError.decodingFailed
-//            } catch let DecodingError.typeMismatch(type, context) {
-//                print("├─ Decoding failed: Type mismatch for \(type)")
-//                print("├─ Context: \(context.debugDescription)")
-//                print("├─ Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: " -> "))")
-//                print("└─ Raw response: \(String(data: data, encoding: .utf8) ?? "Unable to read")")
-//                throw APIError.decodingFailed
-//            } catch {
-//                print("├─ Decoding failed: \(error.localizedDescription)")
-//                print("└─ Raw response: \(String(data: data, encoding: .utf8) ?? "Unable to read")")
-//                throw APIError.decodingFailed
-//            }
-//            
-//        } catch let error as APIError where error == .dbAsleep {
-//            // Retry logic for sleeping server
-//            if retryCount < maxRetries {
-//                let delay = retryCount == 0 ? serverWakeupDelay : retryDelay
-//                print("└─ DB asleep. Will retry in \(delay)s (Attempt \(retryCount + 1)/\(maxRetries))")
-//                
-//                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-//                return try await request(endpoint: endpoint, method: method, body: body, retryCount: retryCount + 1)
-//            } else {
-//                print("└─ Max retries (\(maxRetries)) reached. Giving up.")
-//                throw error
-//            }
-//        } catch {
-//            // Retry on network errors (likely server cold start on first attempt)
-//            if retryCount < maxRetries && isRetryableError(error) {
-//                // Use longer delay for first retry (likely cold start)
-//                let delay = retryCount == 0 ? serverWakeupDelay : retryDelay
-//                let errorType = (error as NSError).code == NSURLErrorTimedOut ? "Timeout (likely cold start)" : "Network error"
-//                
-//                print("└─ \(errorType). Will retry in \(delay)s (Attempt \(retryCount + 1)/\(maxRetries))")
-//                
-//                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-//                return try await request(endpoint: endpoint, method: method, body: body, retryCount: retryCount + 1)
-//            } else {
-//                print("└─ Request failed: \(error.localizedDescription)")
-//                throw error
-//            }
-//        }
-//    }

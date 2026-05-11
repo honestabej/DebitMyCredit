@@ -57,7 +57,7 @@ struct MainTabView: View {
         .overlay(alignment: .top) {
             // Syncing overlay to display acorss all pages whenever a background sync is happening
             if authManager.isRefreshing || authManager.isSyncingSimpleFIN || authManager.isLoadingUserData {
-                let syncText: String = authManager.isSyncingSimpleFIN ? "Syncing SimpleFIN..." :
+                let syncText: String = authManager.isSyncingSimpleFIN ? "Syncing Bank Connections..." :
                                        authManager.isLoadingUserData ? "Loading Data..." : "Refreshing..."
                 HStack(spacing: 8) {
                     ProgressView()
@@ -86,17 +86,15 @@ struct MainTabView: View {
         case .background:
             // App went to background - record the time
             lastBackgroundTime = Date()
-            print("📱 App entered background at \(Date())")
             
         case .active:
             // App became active
             if let backgroundTime = lastBackgroundTime {
                 let timeInBackground = Date().timeIntervalSince(backgroundTime)
-                print("📱 App became active after \(Int(timeInBackground))s in background")
                 
                 // If app was in background for more than 5 minutes, refresh data
                 if timeInBackground > 300 { // 5 minutes
-                    print("🔄 Refreshing data after extended background time")
+                    print("Refreshing data after extended background time")
                     Task {
                         await authManager.fetchAndLoadUserData()
                     }
@@ -113,10 +111,12 @@ struct MainTabView: View {
     }
 }
 
-#Preview {
-    let context = PersistenceController.preview.container.viewContext
-    let authManager = AuthManager(viewContext: context)
-    
+#Preview("With Data") {
     return MainTabView()
-        .environmentObject(authManager)
+        .environmentObject(PersistenceController.previewAuthManager())
+}
+
+#Preview("Empty State") {
+    return MainTabView()
+        .environmentObject(PersistenceController.previewEmptyAuthManager())
 }

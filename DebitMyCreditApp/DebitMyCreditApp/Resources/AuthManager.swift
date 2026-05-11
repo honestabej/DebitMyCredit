@@ -70,9 +70,10 @@ class AuthManager: ObservableObject {
         }
     }
 
-    // Delete the JWT from Keychain when logging out, and set set login status
+    // Delete the JWT from Keychain when logging out, clear all CoreData, and set login status
     func logout() {
         KeychainHelper.delete("auth_token")
+        CoreDataService.shared.clearAllData(context: viewContext)
         self.currentUser = nil
         self.isLoggedIn = false
         print("[AuthManager] User logged out")
@@ -90,7 +91,7 @@ class AuthManager: ObservableObject {
         
         do {
             // First load AzureDB with fresh data from SimpleFIN
-            await syncSimpleFIN()
+            await syncBankConnections()
             
             // Second, fetch new data from the AzureDB and load into CoreData
             await fetchAndLoadUserData()
@@ -106,7 +107,7 @@ class AuthManager: ObservableObject {
     
     // Call the endpoint to trigger a sync from SimpleFIN and load the new info into the AzureDB
     @MainActor
-    func syncSimpleFIN() async {
+    func syncBankConnections() async {
         // Check for authorization
         guard let token = KeychainHelper.get("auth_token") else {
             print("[AuthManager] No sign in token available, cannot inititate sync")
@@ -133,7 +134,7 @@ class AuthManager: ObservableObject {
         
         do {
             // Call the /user/sync endpoint to load SimpleFIN data into AzureDB
-            let response = try await APIService.shared.syncSimpleFIN(token: token)
+            let response = try await APIService.shared.syncBankConnections(token: token)
             print("[AuthManager] SimpleFIN sync status: \(response.message)")
             
             // Indicate SimpleFIN syncing is complete

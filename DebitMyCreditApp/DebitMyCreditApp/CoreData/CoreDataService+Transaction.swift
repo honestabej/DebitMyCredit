@@ -26,9 +26,9 @@ extension CoreDataService {
     }
 
     /// Fetches all transactions for a specific account, sorted by transaction date descending.
-    func fetchTransactions(forAccountID accountID: String, in context: NSManagedObjectContext) -> [Transaction] {
+    func fetchTransactions(forAccountID accountID: UUID, in context: NSManagedObjectContext) -> [Transaction] {
         let fetchRequest: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
-        fetchRequest.predicate = NSPredicate(format: "account.id == %@", accountID)
+        fetchRequest.predicate = NSPredicate(format: "account.id == %@", accountID as CVarArg)
         fetchRequest.sortDescriptors = [NSSortDescriptor(key: "transactionDate", ascending: false)]
 
         do {
@@ -40,9 +40,9 @@ extension CoreDataService {
     }
 
     /// Fetches a single transaction by its ID.
-    func fetchTransaction(byID transactionID: String, in context: NSManagedObjectContext) -> Transaction? {
+    func fetchTransaction(byID transactionID: UUID, in context: NSManagedObjectContext) -> Transaction? {
         let fetchRequest: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
-        fetchRequest.predicate = NSPredicate(format: "id == %@", transactionID)
+        fetchRequest.predicate = NSPredicate(format: "id == %@", transactionID as CVarArg)
         fetchRequest.fetchLimit = 1
 
         do {
@@ -72,7 +72,7 @@ extension CoreDataService {
         do {
             return try context.fetch(fetchRequest)
         } catch {
-            print("❌ Failed to fetch transactions in date range: \(error)")
+            print("Failed to fetch transactions in date range: \(error)")
             return []
         }
     }
@@ -95,7 +95,7 @@ extension CoreDataService {
 
         for serverTxn in transactions {
             let fetchRequest: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
-            fetchRequest.predicate = NSPredicate(format: "id == %@", serverTxn.id)
+            fetchRequest.predicate = NSPredicate(format: "id == %@", serverTxn.id as CVarArg)
             fetchRequest.fetchLimit = 1
 
             let txn: Transaction
@@ -107,6 +107,7 @@ extension CoreDataService {
                 txn.createdAt = Date()
             }
 
+            txn.externalID = serverTxn.externalID
             txn.user = user
             txn.amount = NSDecimalNumber(value: serverTxn.amount)
             txn.name = serverTxn.name
@@ -117,10 +118,10 @@ extension CoreDataService {
                 txn.transactionDate = transactionDate
             }
 
-            // Link to account
-            if !serverTxn.accountID.isEmpty {
+            // Link to account using the UUID string returned as accountID
+            if let accountUUID = UUID(uuidString: serverTxn.accountID) {
                 let accountFetch: NSFetchRequest<Account> = NSFetchRequest(entityName: "Account")
-                accountFetch.predicate = NSPredicate(format: "id == %@", serverTxn.accountID)
+                accountFetch.predicate = NSPredicate(format: "id == %@", accountUUID as CVarArg)
                 accountFetch.fetchLimit = 1
                 if let account = try context.fetch(accountFetch).first {
                     txn.account = account
@@ -130,20 +131,20 @@ extension CoreDataService {
 
         if context.hasChanges {
             try context.save()
-            print("✅ Saved \(transactions.count) transactions to Core Data")
+            print("[CoreDataService+Transaction] Saved \(transactions.count) transactions to Core Data")
         }
     }
 
     /// Updates the pending status and/or name of a transaction.
     @discardableResult
     func updateTransaction(
-        id: String,
+        id: UUID,
         name: String? = nil,
         pending: Bool? = nil,
         in context: NSManagedObjectContext
     ) throws -> Transaction? {
         let fetchRequest: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
-        fetchRequest.predicate = NSPredicate(format: "id == %@", id)
+        fetchRequest.predicate = NSPredicate(format: "id == %@", id as CVarArg)
         fetchRequest.fetchLimit = 1
 
         guard let txn = try context.fetch(fetchRequest).first else {
@@ -166,9 +167,9 @@ extension CoreDataService {
     // MARK: - Delete
 
     /// Deletes a single transaction by ID.
-    func deleteTransaction(id: String, in context: NSManagedObjectContext) throws {
+    func deleteTransaction(id: UUID, in context: NSManagedObjectContext) throws {
         let fetchRequest: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
-        fetchRequest.predicate = NSPredicate(format: "id == %@", id)
+        fetchRequest.predicate = NSPredicate(format: "id == %@", id as CVarArg)
         fetchRequest.fetchLimit = 1
 
         guard let txn = try context.fetch(fetchRequest).first else {
@@ -185,9 +186,9 @@ extension CoreDataService {
     }
 
     /// Deletes all transactions for a given account.
-    func deleteTransactions(forAccountID accountID: String, in context: NSManagedObjectContext) throws {
+    func deleteTransactions(forAccountID accountID: UUID, in context: NSManagedObjectContext) throws {
         let fetchRequest: NSFetchRequest<NSFetchRequestResult> = NSFetchRequest(entityName: "Transaction")
-        fetchRequest.predicate = NSPredicate(format: "account.id == %@", accountID)
+        fetchRequest.predicate = NSPredicate(format: "account.id == %@", accountID as CVarArg)
 
         let batchDelete = NSBatchDeleteRequest(fetchRequest: fetchRequest)
         batchDelete.resultType = .resultTypeObjectIDs

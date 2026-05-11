@@ -186,22 +186,21 @@ struct AccountInfoView: View {
     }
 }
 
-#Preview {
-    let controller = PersistenceController(inMemory: true)
-    let context = controller.container.viewContext
-
-    let user = User(context: context)
-    user.id = UUID()
-    user.email = "test@email.com"
-    try? context.save()
-
-    let authManager = AuthManager(viewContext: context)
-    authManager.currentUser = user
-
+#Preview("With Data") {
+    let context = PersistenceController.preview.container.viewContext
     return NavigationStack {
         AccountInfoView()
             .environment(\.managedObjectContext, context)
-            .environmentObject(authManager)
+            .environmentObject(PersistenceController.previewAuthManager())
+    }
+}
+
+#Preview("Empty State") {
+    let context = PersistenceController.previewEmpty.container.viewContext
+    return NavigationStack {
+        AccountInfoView()
+            .environment(\.managedObjectContext, context)
+            .environmentObject(PersistenceController.previewEmptyAuthManager())
     }
 }
 

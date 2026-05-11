@@ -48,3 +48,12 @@ func getBankCircleLogo(bankName: String) -> String {
         return "Default-Circle-Logo"
     }
 }
+
+// Display how long it has been since a bank last sent updated data
+func timeSinceLastUpdate(from date: Date?) -> String {
+    guard let date else { return "—" }
+    let seconds = Int(Date().timeIntervalSince(date))
+    if seconds < 3600 { return "\(max(1, seconds / 60))m" }
+    if seconds < 86400 { return "\(seconds / 3600)hr" }
+    return "\(seconds / 86400)d"
+}

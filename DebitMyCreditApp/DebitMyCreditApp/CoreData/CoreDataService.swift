@@ -115,6 +115,7 @@ final class CoreDataService {
                 if let localUser = try? context.fetch(userFetch).first {
                     localUser.email = serverUser.email
                     localUser.simpleFinCredentialsSet = serverUser.isSimpleFINConnected
+                    localUser.lunchFlowCredentialsSet = serverUser.isLunchFlowConnected
                     
                     // Parse dates from FlexibleDate
                     if let createdAt = serverUser.createdAt?.dateValue {
@@ -137,21 +138,25 @@ final class CoreDataService {
                 userEntity = try? context.fetch(userFetch).first
             }
             
+            let serverAccountIDs = Set(accounts.map { $0.id })
+            
             for serverAccount in accounts {
                 let accountFetch = Account.fetchRequest()
-                accountFetch.predicate = NSPredicate(format: "id == %@", serverAccount.id)
+                accountFetch.predicate = NSPredicate(format: "id == %@", serverAccount.id as CVarArg)
                 
                 let fetchResult = try? context.fetch(accountFetch)
                 let isNewAccount = fetchResult?.first == nil
                 
                 let localAccount = fetchResult?.first ?? Account(context: context)
                 localAccount.id = serverAccount.id
+                localAccount.externalID = serverAccount.externalID
                 localAccount.name = serverAccount.name
                 localAccount.bank = serverAccount.bank
                 localAccount.accountNumber = serverAccount.accountNumber ?? ""
                 localAccount.availableBalance = NSDecimalNumber(value: serverAccount.availableBalance)
                 localAccount.balance = NSDecimalNumber(value: serverAccount.balance)
                 localAccount.accountType = serverAccount.accountType
+                localAccount.accountSource = serverAccount.accountSource
                 
                 // Set the user relationship
                 if isNewAccount {
@@ -179,13 +184,25 @@ final class CoreDataService {
                 }
             }
             
+            // Delete any local accounts not present in the server response
+            let allLocalAccountsFetch = Account.fetchRequest()
+            if let allLocalAccounts = try? context.fetch(allLocalAccountsFetch) {
+                for localAccount in allLocalAccounts {
+                    if let id = localAccount.id, !serverAccountIDs.contains(id) {
+                        context.delete(localAccount)
+                        print("[CoreDataService] Deleted stale account: \(localAccount.name ?? "unknown") (id: \(id))")
+                    }
+                }
+            }
+            
             // 3. Sync Transactions
             for serverTxn in transactions {
                 let txnFetch = Transaction.fetchRequest()
-                txnFetch.predicate = NSPredicate(format: "id == %@", serverTxn.id)
+                txnFetch.predicate = NSPredicate(format: "id == %@", serverTxn.id as CVarArg)
                 
                 let localTxn = (try? context.fetch(txnFetch).first) ?? Transaction(context: context)
                 localTxn.id = serverTxn.id
+                localTxn.externalID = serverTxn.externalID
                 
                 // Set the user relationship
                 if let userEntity = userEntity {

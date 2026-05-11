@@ -3,13 +3,15 @@
     <entity name="Account" representedClassName="Account" syncable="YES" codeGenerationType="class">
         <attribute name="accountColor" optional="YES" attributeType="String"/>
         <attribute name="accountNumber" optional="YES" attributeType="String"/>
+        <attribute name="accountSource" optional="YES" attributeType="String"/>
         <attribute name="accountType" optional="YES" attributeType="String"/>
         <attribute name="availableBalance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
         <attribute name="balance" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
         <attribute name="balanceDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="bank" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <attribute name="id" optional="YES" attributeType="String"/>
+        <attribute name="externalID" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="accountBalanceHistories" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="AccountBalanceHistory" inverseName="account" inverseEntity="AccountBalanceHistory"/>
@@ -29,7 +31,8 @@
     <entity name="Transaction" representedClassName="Transaction" syncable="YES" codeGenerationType="class">
         <attribute name="amount" optional="YES" attributeType="Decimal" defaultValueString="0.0"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <attribute name="id" optional="YES" attributeType="String"/>
+        <attribute name="externalID" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="notes" optional="YES" attributeType="String"/>
         <attribute name="pending" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
@@ -59,6 +62,7 @@
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="email" optional="YES" attributeType="String"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lunchFlowCredentialsSet" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="simpleFinCredentialsSet" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="accounts" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Account" inverseName="user" inverseEntity="Account"/>

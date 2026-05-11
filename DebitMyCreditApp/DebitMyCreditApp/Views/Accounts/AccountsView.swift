@@ -5,31 +5,35 @@ struct AccountsView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.managedObjectContext) private var viewContext
 
+    // Fetch all accounts except hidden/placeholder types, sorted by type then name
     @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Account.name, ascending: true)],
-        predicate: NSPredicate(format: "accountType == %@", "Debit"),
+        sortDescriptors: [
+            NSSortDescriptor(keyPath: \Account.accountType, ascending: true),
+            NSSortDescriptor(keyPath: \Account.name, ascending: true)
+        ],
+        predicate: NSPredicate(format: "accountType != %@ AND accountType != %@", "-", "Hide"),
         animation: .default
     )
-    private var debitAccounts: FetchedResults<Account>
+    private var accounts: FetchedResults<Account>
 
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Account.name, ascending: true)],
-        predicate: NSPredicate(format: "accountType == %@", "Credit"),
-        animation: .default
-    )
-    private var creditAccounts: FetchedResults<Account>
+    // Display order for known account types; unknown types fall at the end
+    private let typeOrder = ["Cash", "Credit", "Investment", "Loan"]
 
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Account.name, ascending: true)],
-        predicate: NSPredicate(format: "accountType != %@ AND accountType != %@ AND accountType != %@", "Debit", "Credit", "N/A"),
-        animation: .default
-    )
-    private var otherAccounts: FetchedResults<Account>
+    // Accounts grouped by type, in the defined display order
+    private var groupedAccounts: [(type: String, accounts: [Account])] {
+        let dict = Dictionary(grouping: accounts, by: { $0.accountType ?? "Other" })
+        let knownTypes = typeOrder.filter { dict[$0] != nil }
+        let otherTypes = dict.keys.filter { !typeOrder.contains($0) }.sorted()
+        return (knownTypes + otherTypes).compactMap { type in
+            guard let group = dict[type] else { return nil }
+            return (type: type, accounts: group)
+        }
+    }
     
     var body: some View {
         ZStack () {
             // Background gradient
-            AppGradients.horizontalGradient.ignoresSafeArea()
+            Color.appGreen.ignoresSafeArea()
             
             // White background layer (decorative, extends behind tab bar)
             VStack {}
@@ -49,6 +53,7 @@ struct AccountsView: View {
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                         .foregroundColor(.white)
+                        .padding(.top, 3)
                     
                     // Dont show refresh button if a refresh is currently taking place
                     if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
@@ -62,6 +67,7 @@ struct AccountsView: View {
                                     .foregroundColor(.white)
                             }
                             .padding(.trailing, 20)
+                            .padding(.top, 3)
                         }
                     }
                 }
@@ -81,9 +87,9 @@ struct AccountsView: View {
     private var accountsList: some View {
         ScrollView {
             LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                accountSection(title: "Debit", accounts: Array(debitAccounts))
-                accountSection(title: "Credit", accounts: Array(creditAccounts))
-                accountSection(title: "Other", accounts: Array(otherAccounts))
+                ForEach(groupedAccounts, id: \.type) { group in
+                    accountSection(title: group.type, accounts: group.accounts)
+                }
             }
         }
     }
@@ -93,7 +99,7 @@ struct AccountsView: View {
         if !accounts.isEmpty {
             Section {
                 ForEach(accounts) { account in
-                    AccountRow(account: account, useAvailableBalance: title == "Debit")
+                    AccountRow(account: account, useAvailableBalance: title == "Cash")
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
 
@@ -123,17 +129,7 @@ struct AccountRow: View {
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showAccountDetail = false
 
-    private func relativeTime(from date: Date?) -> String {
-        guard let date else { return "—" }
-        let seconds = Int(Date().timeIntervalSince(date))
-        if seconds < 3600 { return "\(max(1, seconds / 60))m" }
-        if seconds < 86400 { return "\(seconds / 3600)hr" }
-        return "\(seconds / 86400)d"
-    }
-
     var body: some View {
-
-
         Button(action: { showAccountDetail = true }) {
             HStack(alignment: .top, spacing: 10) {
                 
@@ -163,7 +159,7 @@ struct AccountRow: View {
                             Spacer()
                             HStack {
                                 Spacer()
-                                if let acctNum = account.accountNumber {
+                                if let acctNum = account.accountNumber, !acctNum.isEmpty {
                                     Text("...\(acctNum)")
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundColor(.white)
@@ -189,7 +185,7 @@ struct AccountRow: View {
                         Spacer()
                         HStack(spacing: 2) {
                             Image(systemName: "clock")
-                            Text(relativeTime(from: account.balanceDate))
+                            Text(timeSinceLastUpdate(from: account.balanceDate))
                         }
                         .font(.caption2)
                         .foregroundColor(Color(uiColor: .gray))
@@ -229,60 +225,18 @@ struct AccountRow: View {
 
 
 // View for each row
-#Preview {
-    let controller = PersistenceController(inMemory: true)
-    let context = controller.container.viewContext
-
-    let account1 = Account(context: context)
-    account1.id = "1"
-    account1.name = "Chase Checking"
-    account1.bank = "Chase"
-    account1.accountType = "Credit"
-    account1.accountNumber = "1234"
-    account1.balance = NSDecimalNumber(value: 1234.56)
-    account1.balanceDate = Date()
-
-    let account2 = Account(context: context)
-    account2.id = "2"
-    account2.name = "Abe's Checking"
-    account2.bank = "Wells Fargo"
-    account2.accountType = "Debit"
-    account2.accountNumber = "1234"
-    account2.availableBalance = NSDecimalNumber(value: 567.89)
-    account2.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    
-    let account3 = Account(context: context)
-    account3.id = "3"
-    account3.name = "Shae's Checking"
-    account3.bank = "Wells Fargo"
-    account3.accountType = "Debit"
-    account3.accountNumber = "1234"
-    account3.availableBalance = NSDecimalNumber(value: 7554.89)
-    account3.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    
-    let account4 = Account(context: context)
-    account4.id = "4"
-    account4.name = "Apple HYSA"
-    account4.bank = "Apple"
-    account4.accountType = "Debit"
-    account4.accountNumber = "1234"
-    account4.availableBalance = NSDecimalNumber(value: 33089.78)
-    account4.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-    
-    let account6 = Account(context: context)
-    account6.id = "1"
-    account6.name = "ADP Retirement"
-    account6.bank = "ADP"
-    account6.accountType = "Other"
-    account6.accountNumber = "1234"
-    account6.balance = NSDecimalNumber(value: 6397103.89)
-    account6.balanceDate = Date()
-
-    try? context.save()
-
+#Preview("With Data") {
+    let context = PersistenceController.preview.container.viewContext
     return AccountsView()
         .environment(\.managedObjectContext, context)
-        .environmentObject(AuthManager(viewContext: context))
+        .environmentObject(PersistenceController.previewAuthManager())
+}
+
+#Preview("Empty State") {
+    let context = PersistenceController.previewEmpty.container.viewContext
+    return AccountsView()
+        .environment(\.managedObjectContext, context)
+        .environmentObject(PersistenceController.previewEmptyAuthManager())
 }
 
 

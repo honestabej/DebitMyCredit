@@ -26,8 +26,8 @@ class APIModels {
         struct UserData: Sendable, Codable {
             let id: String
             let email: String
-            let lastSimpleFinSync: String?
             let simpleFINConnected: Bool?
+            let lunchFlowConnected: Bool?
             let createdAt: String?
             let updatedAt: String?
         }
@@ -45,6 +45,7 @@ class APIModels {
             let id: String
             let email: String
             let simpleFINConnected: IntOrBool?
+            let lunchFlowConnected: IntOrBool?
             let createdAt: FlexibleDate?
             let updatedAt: FlexibleDate?
             
@@ -59,10 +60,22 @@ class APIModels {
                     return false
                 }
             }
+            
+            var isLunchFlowConnected: Bool {
+                switch lunchFlowConnected {
+                case .int(let value):
+                    return value == 1
+                case .bool(let value):
+                    return value
+                case .none:
+                    return false
+                }
+            }
         }
         
         struct Transaction: Codable {
-            let id: String
+            let id: UUID
+            let externalID: String
             let accountID: String
             let amount: Double
             let name: String
@@ -86,27 +99,52 @@ class APIModels {
         let newPassword: String?
     }
     
-    // MARK: SimpleFIN Connection req/rec models
-    struct SimpleFINConnectionRequest: Codable {
+    // MARK: SimpleFIN or Lunch Flow Connection req/rec models
+    struct BankConnectionRequest: Codable {
         let userID: UUID
-        let setupToken: String
+        let credential: String
     }
     
-    struct SimpleFINConnectionResponse: Codable {
+    struct BankConnectionResponse: Codable {
         let success: Bool?
         let message: String?
         let accounts: [Account]?
     }
     
-    struct SimpleFINDeletionRequest: Codable {
+    struct BankConnectionDeletionRequest: Codable {
         let userID: UUID
     }
-        
+    
+    struct ManualAccountDeletionRequest: Codable {
+        let userID: UUID
+        let accountID: UUID
+    }
+
+    struct AddManualAccountRequest: Codable {
+        let userID: UUID
+        let name: String
+        let balance: Double
+        let availableBalance: Double?
+        let bank: String?
+        let accountNumber: String?
+        let accountType: String?
+        let createdAt: String
+        let updatedAt: String
+    }
+
+    struct AddManualAccountResponse: Codable {
+        let success: Bool
+        let message: String?
+        let account: Account?
+    }
+
     // MARK: Account req/rec models
     struct Account: Codable {
-        let id: String
+        let id: UUID
+        let externalID: String
         let name: String
-        let bank: String
+        let bank: String?
+        let accountSource: String?
         let accountNumber: String?
         let availableBalance: Double
         let balance: Double
@@ -115,16 +153,25 @@ class APIModels {
         let createdAt: FlexibleDate?
         let updatedAt: FlexibleDate?
         
-        /// Converts the SimpleFINAccount to a dictionary format expected by CoreDataService
+        /// Converts the Account to a dictionary format expected by CoreDataService
         var toDictionary: [String: Any] {
             var data: [String: Any] = [
                 "id": id,
+                "externalID": externalID,
                 "name": name,
-                "bank": bank,
+                "bank": bank ?? "",
                 "availableBalance": availableBalance,
                 "balance": balance
             ]
-            
+
+            if let accountSource = accountSource {
+                data["accountSource"] = accountSource
+            }
+
+            if let accountNumber = accountNumber {
+                data["accountNumber"] = accountNumber
+            }
+
             if let accountType = accountType {
                 data["accountType"] = accountType
             }
@@ -311,5 +358,18 @@ class APIModels {
     struct SyncResponse: Codable {
         let success: Bool
         let message: String
+        let stats: SyncStats?
+        
+        struct SyncStats: Codable {
+            let simpleFin: ServiceSyncStats?
+            let lunchFlow: ServiceSyncStats?
+        }
+        
+        struct ServiceSyncStats: Codable {
+            let accountsUpdated: Int?
+            let accountsAdded: Int?
+            let transactionsInserted: Int?
+            let pendingTransactionsRemoved: Int?
+        }
     }
 }

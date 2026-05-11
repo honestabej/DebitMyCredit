@@ -6,14 +6,17 @@ struct SettingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @State private var notificationsEnabled: Bool = true
     @State private var showingAccountInfoView = false
-    @State private var showingSimpleFinView = false
+    @State private var showingManageBankConnectionsView = false
     @State private var showingManageAccountsView = false
     @State private var showLogOutConfirmation = false
+    @State private var bankConnectionsDetent: PresentationDetent = .height(220)
+    @State private var bankConnectionsDetents: Set<PresentationDetent> = [.height(220)]
     
     var body: some View {
         ZStack {
             // Background gradient
-            AppGradients.horizontalGradient.ignoresSafeArea()
+//            AppGradients.horizontalGradient.ignoresSafeArea()
+            Color.appGreen.ignoresSafeArea()
             
             // White background behind tab bar
             VStack {}
@@ -21,19 +24,19 @@ struct SettingsView: View {
                 .background(Color.white)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
                 .ignoresSafeArea(edges: .bottom)
-                .padding(.top, 70)
+                .padding(.top, 45)
             
             // Actual content
             VStack {
                 Text("Settings")
                     .font(.system(size: 25))
                     .fontWeight(.bold)
-                    .padding(.top)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.white)
+                    .padding(.top, 3)
                 
-                Spacer().frame(height: 45)
+                Spacer().frame(height: 40)
                 
                 VStack(spacing: 20) {                    
                     HStack {
@@ -66,27 +69,10 @@ struct SettingsView: View {
 
                     // Display connection status on button to transition to SetSimpleFinView
                     Button {
-                        showingSimpleFinView = true
+                        showingManageBankConnectionsView = true
                     } label: {
                         HStack {
-                            Text("SimpleFIN Connection").fontWeight(.medium).foregroundColor(.primary)
-                            Spacer()
-                            Text(authManager.currentUser?.simpleFinCredentialsSet == true ? "Connected" : "Not Connected")
-                                .foregroundColor(authManager.currentUser?.simpleFinCredentialsSet == true ? .secondary : .gray)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                        }
-                        .padding(.horizontal, 20)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    // Display arrow on button to transition to ManageAccountsView
-                    Button {
-                        showingManageAccountsView = true
-                    } label: {
-                        HStack {
-                            Text("Manage Bank Accounts").fontWeight(.medium).foregroundColor(.primary)
+                            Text("Manage Bank Connections").fontWeight(.medium).foregroundColor(.primary)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 14, weight: .semibold))
@@ -129,26 +115,29 @@ struct SettingsView: View {
             }
             .presentationDetents([.height(300)])
         }
-        .sheet(isPresented: $showingSimpleFinView) {
-            NavigationStack {
-                SetSimpleFinView()
-            }
-            .presentationDetents([.height(320)])
-        }
-        .sheet(isPresented: $showingManageAccountsView) {
-            NavigationStack {
-                ManageAccountsView()
-            }
-            .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showingManageBankConnectionsView, onDismiss: {
+            bankConnectionsDetent = .height(220)
+            bankConnectionsDetents = [.height(220)]
+        }) {
+            ManageBankConnectionsView(selectedDetent: $bankConnectionsDetent, allowedDetents: $bankConnectionsDetents)
+                .environmentObject(authManager)
+                .environment(\.managedObjectContext, viewContext)
+                .presentationDetents(bankConnectionsDetents, selection: $bankConnectionsDetent)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.clear)
         }
     }
 }
 
-#Preview {
-    let context = PersistenceController.preview.container.viewContext
-    let authManager = AuthManager(viewContext: context)
-    
+#Preview("With Data") {
     return SettingsView()
-        .environmentObject(authManager)
+        .environmentObject(PersistenceController.previewAuthManager())
+        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+}
+
+#Preview("Empty State") {
+    return SettingsView()
+        .environmentObject(PersistenceController.previewEmptyAuthManager())
+        .environment(\.managedObjectContext, PersistenceController.previewEmpty.container.viewContext)
 }
 
