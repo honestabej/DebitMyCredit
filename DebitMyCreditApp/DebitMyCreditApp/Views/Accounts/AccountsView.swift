@@ -38,7 +38,7 @@ struct AccountsView: View {
             // White background layer (decorative, extends behind tab bar)
             VStack {}
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
+                .background(Color.lightBackground)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
                 .ignoresSafeArea(edges: .bottom)
                 .padding(.top, 295)
@@ -101,12 +101,12 @@ struct AccountsView: View {
                 ForEach(accounts) { account in
                     AccountRow(account: account, useAvailableBalance: title == "Cash")
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 5)
 
-                    if account != accounts.last {
-                        Divider()
-                            .padding(.leading, 20)
-                    }
+//                    if account != accounts.last {
+//                        Divider()
+//                            .padding(.leading, 20)
+//                    }
                 }
             } header: {
                 Text(title)
@@ -116,7 +116,7 @@ struct AccountsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
-                    .background(Color.white)
+                    .background(Color.lightBackground)
             }
         }
     }
@@ -131,48 +131,50 @@ struct AccountRow: View {
 
     var body: some View {
         Button(action: { showAccountDetail = true }) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+//                // Card Image
+//                ZStack {
+//                    RoundedRectangle(cornerRadius: 8)
+//                        .fill(getBankColor(bankName: account.bank?.lowercased() ?? ""))
+//                        .frame(width: 110, height: 69)
+//                    
+//                    // Bank logo — top left
+//                    VStack {
+//                        HStack {
+//                            Image(getBankTextLogo(bankName: account.bank?.lowercased() ?? ""))
+//                                .resizable()
+//                                .scaledToFit()
+//                                .frame(maxHeight: 13)
+//                                .padding([.top, .leading], 5)
+//                            Spacer()
+//                        }
+//                        Spacer()
+//                    }
+//                    .frame(width: 100, height: 63)
+//                    
+//                    // Last 4 digits — bottom right
+//                    VStack {
+//                        Spacer()
+//                        HStack {
+//                            Spacer()
+//                            if let acctNum = account.accountNumber, !acctNum.isEmpty {
+//                                Text("•••• \(acctNum)")
+//                                    .font(.system(size: 13, weight: .medium))
+//                                    .foregroundColor(.white)
+//                                    .padding(.bottom, 5)
+//                                    .padding(.trailing, 8)
+//                            }
+//                        }
+//                    }
+//                    .frame(width: 110, height: 69)
+//                }
                 
-                VStack() {
-                    // Card Image
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(getBankColor(bankName: account.bank?.lowercased() ?? ""))
-                            .frame(width: 110, height: 69)
-                        
-                        // Bank logo — top left
-                        VStack {
-                            HStack {
-                                Image(getBankTextLogo(bankName: account.bank?.lowercased() ?? ""))
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxHeight: 13)
-                                    .padding([.top, .leading], 5)
-                                Spacer()
-                            }
-                            Spacer()
-                        }
-                        .frame(width: 100, height: 63)
-                        
-                        // Last 4 digits — bottom right
-                        VStack {
-                            Spacer()
-                            HStack {
-                                Spacer()
-                                if let acctNum = account.accountNumber, !acctNum.isEmpty {
-                                    Text("...\(acctNum)")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.white)
-                                        .padding(.bottom, 5)
-                                        .padding(.trailing, 8)
-                                }
-                            }
-                        }
-                        .frame(width: 110, height: 69)
-                    }
-                    
-
-                }
+                // Display corresponding Bank Logo
+                Image(getBankCircleLogo(bankName: account.bank?.lowercased() ?? ""))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 45, height: 45)
+                    .clipShape(Circle())
                 
                 VStack(alignment: .leading) {
                     HStack(alignment: .firstTextBaseline) {
@@ -182,36 +184,60 @@ struct AccountRow: View {
                             .foregroundColor(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Spacer()
-                        HStack(spacing: 2) {
-                            Image(systemName: "clock")
-                            Text(timeSinceLastUpdate(from: account.balanceDate))
-                        }
+//                        Spacer()
+//                        HStack(spacing: 2) {
+//                            Image(systemName: "clock")
+//                            Text(timeSinceLastUpdate(from: account.balanceDate))
+//                        }
                         .font(.caption2)
                         .foregroundColor(Color(uiColor: .gray))
                     }
                     
-                    Spacer()
+//                    Spacer()
                     
-                    // Amount + label pairs
-                    VStack(alignment: .leading, spacing: 2) {
-                        let displayBalance = useAvailableBalance ? account.availableBalance : account.balance
-                        Text(displayBalance.map { $0.decimalValue as Decimal }
-                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
-                            .font(.system(size: 20))
+                    // Display the account number if available, and the time since last update
+                    HStack {
+                        if let accountNumber = account.accountNumber, !accountNumber.isEmpty {
+                            Text("•••• \(accountNumber)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Text("•")
+                        }
                         
-                        Text(useAvailableBalance ? "Available" : "Balance")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.gray)
-                            .padding(.top, 1)
+                        HStack(spacing: 2) {
+                            Image(systemName: "clock")
+                            Text(timeSinceLastUpdate(from: account.balanceDate))
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     }
+                    
+//                    // Amount + label pairs
+//                    VStack(alignment: .leading, spacing: 2) {
+//                        let displayBalance = useAvailableBalance ? account.availableBalance : account.balance
+//                        Text(displayBalance.map { $0.decimalValue as Decimal }
+//                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
+//                            .font(.system(size: 20))
+//                        
+//                        Text(useAvailableBalance ? "Available" : "Balance")
+//                            .font(.caption)
+//                            .fontWeight(.semibold)
+//                            .foregroundColor(.gray)
+//                            .padding(.top, 1)
+//                    }
                 
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: 69)
+//                .frame(height: 69)
+                
+                let displayBalance = useAvailableBalance ? account.availableBalance : account.balance
+                Text(displayBalance.map { $0.decimalValue as Decimal }
+                    .map { $0.formatted(.currency(code: "USD")) } ?? "")
+                    .font(.system(size: 17))
+                    .fontWeight(.bold)
             }
-                .contentShape(Rectangle())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showAccountDetail) {
@@ -219,6 +245,10 @@ struct AccountRow: View {
                 .environment(\.managedObjectContext, viewContext)
                 .presentationDragIndicator(.visible)
         }
+        .padding(8)
+        .background(Color.white)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.07), radius: 4, x: 0, y: 2)
     }
 }
 

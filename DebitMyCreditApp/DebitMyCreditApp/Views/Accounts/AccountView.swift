@@ -52,6 +52,8 @@ struct AccountView: View {
         let bankColor = getBankColor(bankName: account.bank?.lowercased() ?? "")
         
         ZStack(alignment: .top) {
+            Color.lightBackground.ignoresSafeArea()
+            
             // Gradient background: bank color at top, fading to clear ~25% down
             GeometryReader { geo in
                 LinearGradient(
@@ -110,29 +112,31 @@ struct AccountView: View {
                     
                     Spacer()
                     
-                    VStack() {
-                        Text(account.availableBalance.map { $0.decimalValue as Decimal }
-                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
+                    if (account.accountType == "Cash") {
+                        VStack() {
+                            Text(account.availableBalance.map { $0.decimalValue as Decimal }
+                                .map { $0.formatted(.currency(code: "USD")) } ?? "")
                             .font(.system(size: 17))
-                        
-                        Text("Posted")
-                            .font(.system(size: 11))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.gray)
-                        
-    
-                        Text(account.availableBalance.map { $0.decimalValue as Decimal }
-                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
+                            
+                            Text("Posted")
+                                .font(.system(size: 11))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.gray)
+                            
+                            
+                            Text(account.availableBalance.map { $0.decimalValue as Decimal }
+                                .map { $0.formatted(.currency(code: "USD")) } ?? "")
                             .font(.system(size: 17))
                             .padding(.top, 2)
+                            
+                            Text("Unpaid Tx")
+                                .font(.system(size: 11))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.gray)
+                        }
                         
-                        Text("Unpaid Tx")
-                            .font(.system(size: 11))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.gray)
+                        Spacer()
                     }
-                    
-                    Spacer()
                 }
                 .padding(.top, 1)
                 
@@ -150,7 +154,7 @@ struct AccountView: View {
                     .font(.system(size: 20))
                     .fontWeight(.semibold)
                 
-                Divider()
+//                Divider()
                 
                 // Transactions table
                 transactionsList
@@ -184,7 +188,7 @@ struct AccountView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.systemBackground))
+                            .background(Color.lightBackground)
                     }
                 }
 
@@ -206,7 +210,7 @@ struct AccountView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 4)
-                            .background(Color(.systemBackground))
+                            .background(Color.lightBackground)
                     }
                 }
             }
@@ -228,23 +232,25 @@ struct TransactionRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(0)
+                    .foregroundColor(transaction.pending ? .secondary : .primary)
                 
                 Spacer(minLength: 8)
                 
                 // Show allocated amount if present, otherwise full transaction amount
                 let displayAmount = allocatedAmount ?? transaction.amount
-                Text(displayAmount.map {
-                    $0.decimalValue as Decimal
-                }.map {
-                    $0.formatted(.currency(code: "USD"))
-                } ?? "")
+                let amountDecimal = displayAmount.map { $0.decimalValue as Decimal }
+                let amountColor: Color = {
+                    guard let val = amountDecimal else { return .primary }
+                    return val < 0 ? .primary : .green
+                }()
+                Text(amountDecimal.map { $0.formatted(.currency(code: "USD")) } ?? "")
                 .fontWeight(.bold)
                 .font(.system(size: 15))
+                .foregroundStyle(transaction.pending ? .secondary : amountColor)
                 .fixedSize()
                 .layoutPriority(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundColor(transaction.pending ? .secondary : .primary)
             
             // Bottom row: only shown when the transaction is from a different account
             if transaction.account != dbtAcct {

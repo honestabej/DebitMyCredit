@@ -210,9 +210,9 @@ final class CoreDataService {
                 }
                 
                 // Link to the account by finding it via accountID
-                if !serverTxn.accountID.isEmpty {
+                if let accountUUID = UUID(uuidString: serverTxn.accountID) {
                     let accountFetch = Account.fetchRequest()
-                    accountFetch.predicate = NSPredicate(format: "id == %@", serverTxn.accountID)
+                    accountFetch.predicate = NSPredicate(format: "id == %@", accountUUID as CVarArg)
                     if let account = try? context.fetch(accountFetch).first {
                         localTxn.account = account
                     }

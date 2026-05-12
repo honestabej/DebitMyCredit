@@ -5,6 +5,12 @@ enum BankConnectionDestination: Hashable {
     case simpleFin, lunchFlow, manual
 }
 
+// Holds pending edits for a single account before Save is tapped
+struct PendingAccountEdit {
+    var name: String
+    var accountType: String
+}
+
 // MARK: Initial view -- ManageBankConnectionsView
 struct ManageBankConnectionsView: View {
     // Inherit the context and authManager passed in from SettingsView

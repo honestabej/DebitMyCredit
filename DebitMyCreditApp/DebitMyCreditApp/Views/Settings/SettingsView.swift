@@ -21,7 +21,7 @@ struct SettingsView: View {
             // White background behind tab bar
             VStack {}
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
+                .background(Color.lightBackground)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
                 .ignoresSafeArea(edges: .bottom)
                 .padding(.top, 45)

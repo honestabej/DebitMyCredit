@@ -8,6 +8,7 @@ struct TransactionsView: View {
     @State private var selectedAccount: Account? = nil
     @State private var showCardPicker = false
     @State private var showFilterView = false
+    @State private var filterShowsCustomRange = false
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Account.name, ascending: true)],
@@ -36,7 +37,7 @@ struct TransactionsView: View {
             // White background behind tab bar
             VStack {}
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
+                .background(Color.lightBackground)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
                 .ignoresSafeArea(edges: .bottom)
                 .padding(.top, 45)
@@ -72,81 +73,11 @@ struct TransactionsView: View {
                 
                     
                 
-                Spacer().frame(height: 40)
+                Spacer().frame(height: 25)
                 
                 HStack {
-                    Text("Card: ")
-                        .padding(.leading, 15)
-                        .fontWeight(.semibold)
-                    
-                    Button {
-                        showCardPicker = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(cardName)
-                                .animation(nil, value: cardName)
-                            Image(systemName: "chevron.down")
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(Color.appOrange)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .foregroundStyle(.white)
-                        .fontWeight(.bold)
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showCardPicker, arrowEdge: .top) {
-                        let accounts = Array(creditAccounts)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Button {
-                                selectedAccount = nil
-                                showCardPicker = false
-                            } label: {
-                                HStack {
-                                    Text("All")
-                                        .foregroundStyle(selectedAccount == nil ? Color.appOrange : .primary)
-                                        .fontWeight(selectedAccount == nil ? .semibold : .regular)
-                                    Spacer()
-                                    if selectedAccount == nil {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Color.appOrange)
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            ForEach(accounts) { account in
-                                Divider()
-                                Button {
-                                    selectedAccount = account
-                                    showCardPicker = false
-                                } label: {
-                                    HStack {
-                                        Text(account.name ?? "")
-                                            .foregroundStyle(selectedAccount == account ? Color.appOrange : .primary)
-                                            .fontWeight(selectedAccount == account ? .semibold : .regular)
-                                        Spacer()
-                                        if selectedAccount == account {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(Color.appOrange)
-                                        }
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 12)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .frame(minWidth: 200)
-                        .presentationCompactAdaptation(.popover)
-                    }
-                    
                     Spacer()
-                    
+
                     Button {
                         showFilterView = true
                     } label: {
@@ -155,7 +86,6 @@ struct TransactionsView: View {
                             .padding(.trailing, 15)
                             .font(.system(size: 23))
                     }
-                    
                 }
                 .frame(maxWidth: .infinity)
                 
@@ -177,9 +107,10 @@ struct TransactionsView: View {
         }
         .sheet(isPresented: $showFilterView) {
             NavigationStack {
-                FilterView()
+                FilterView(selectedAccount: $selectedAccount, accounts: Array(creditAccounts))
             }
-            .presentationDetents([.height(200)])
+            .presentationDetents([.height(350)])
+            .presentationDragIndicator(.visible)
         }
 
     }
@@ -258,6 +189,9 @@ struct TransactionsView: View {
 
     // View to display the filter options
     private struct FilterView: View {
+        @Binding var selectedAccount: Account?
+        let accounts: [Account]
+
         private enum RangeOption: String, CaseIterable, Identifiable {
             case last30 = "Last 30 Days"
             case ytd = "Year To Date"
@@ -266,21 +200,60 @@ struct TransactionsView: View {
         }
 
         @State private var selected: RangeOption = .last30
+        @State private var startDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        @State private var endDate: Date = Date()
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Display transactions from:")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, alignment: .center)
-
-                // Radio-style list
+            VStack(alignment: .leading, spacing: 20) {
+                // Date range filter
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(RangeOption.allCases) { option in
-                        Button(action: { selected = option }) {
+                    Text("Date Range:")
+                        .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(RangeOption.allCases) { option in
+                            Button(action: { selected = option }) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: selected == option ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(Color.appOrange)
+                                    Text(option.rawValue)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 4)
+                        }
+                    }
+
+                    if selected == .custom {
+                        HStack(spacing: 8) {
+                            DatePicker("", selection: $startDate, in: ...endDate, displayedComponents: .date)
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                            Text("to")
+                                .foregroundStyle(.secondary)
+                            DatePicker("", selection: $endDate, in: startDate..., displayedComponents: .date)
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                            Spacer()
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                
+                // Card filter
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Card:")
+                        .font(.headline)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button { selectedAccount = nil } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: selected == option ? "largecircle.fill.circle" : "circle")
+                                Image(systemName: selectedAccount == nil ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(Color.appOrange)
-                                Text(option.rawValue)
+                                Text("All")
                                     .foregroundStyle(.primary)
                                 Spacer()
                             }
@@ -288,17 +261,22 @@ struct TransactionsView: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 4)
+                        
+                        ForEach(accounts) { account in
+                            Button { selectedAccount = account } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: selectedAccount == account ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(Color.appOrange)
+                                    Text(account.name ?? "")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 4)
+                        }
                     }
-                }
-
-                // Optional: Placeholder for custom date pickers when custom is selected
-                if selected == .custom {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Select a date range")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .transition(.opacity)
                 }
 
                 Spacer(minLength: 0)
@@ -306,6 +284,8 @@ struct TransactionsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.top, 20)
+            .navigationTitle("Filters")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }
@@ -341,7 +321,7 @@ struct TransactionRow: View {
                     Spacer ()
                     
                     let tgName = transaction.transferGroup?.name ?? "--"
-                    Text("TG: \(tgName)")
+                    Text("Pay Group: \(tgName)")
                         .font(.caption)
                         .fontWeight(.light)
                         .lineLimit(1)

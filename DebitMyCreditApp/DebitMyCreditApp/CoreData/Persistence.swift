@@ -105,79 +105,6 @@ struct PersistenceController {
         hysa.balance = NSDecimalNumber(value: 22089.78)
         hysa.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
         hysa.accountColor = CoreDataService.randomAccountColor()
-        
-        let hysa1 = Account(context: context)
-        hysa1.id = UUID()
-        hysa1.externalID = "act5"
-        hysa1.name = "Apple HYSA"
-        hysa1.bank = "Apple"
-        hysa1.accountType = "Cash"
-        hysa1.accountNumber = "4567"
-        hysa1.accountSource = "Manual"
-        hysa1.availableBalance = NSDecimalNumber(value: 22089.78)
-        hysa1.balance = NSDecimalNumber(value: 22089.78)
-        hysa1.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-        hysa1.accountColor = CoreDataService.randomAccountColor()
-        let hysa2 = Account(context: context)
-        hysa2.id = UUID()
-        hysa2.externalID = "act5"
-        hysa2.name = "Apple HYSA"
-        hysa2.bank = "Apple"
-        hysa2.accountType = "Cash"
-        hysa2.accountNumber = "4567"
-        hysa2.accountSource = "Manual"
-        hysa2.availableBalance = NSDecimalNumber(value: 22089.78)
-        hysa2.balance = NSDecimalNumber(value: 22089.78)
-        hysa2.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-        hysa2.accountColor = CoreDataService.randomAccountColor()
-        let hysa3 = Account(context: context)
-        hysa3.id = UUID()
-        hysa3.externalID = "act5"
-        hysa3.name = "Apple HYSA"
-        hysa3.bank = "Apple"
-        hysa3.accountType = "Cash"
-        hysa3.accountNumber = "4567"
-        hysa3.accountSource = "Manual"
-        hysa3.availableBalance = NSDecimalNumber(value: 22089.78)
-        hysa3.balance = NSDecimalNumber(value: 22089.78)
-        hysa3.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-        hysa3.accountColor = CoreDataService.randomAccountColor()
-        let hysa4 = Account(context: context)
-        hysa4.id = UUID()
-        hysa4.externalID = "act5"
-        hysa4.name = "Apple HYSA"
-        hysa4.bank = "Apple"
-        hysa4.accountType = "Cash"
-        hysa4.accountNumber = "4567"
-        hysa4.accountSource = "Manual"
-        hysa4.availableBalance = NSDecimalNumber(value: 22089.78)
-        hysa4.balance = NSDecimalNumber(value: 22089.78)
-        hysa4.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-        hysa4.accountColor = CoreDataService.randomAccountColor()
-        let hysa5 = Account(context: context)
-        hysa5.id = UUID()
-        hysa5.externalID = "act5"
-        hysa5.name = "Apple HYSA"
-        hysa5.bank = "Apple"
-        hysa5.accountType = "Cash"
-        hysa5.accountNumber = "4567"
-        hysa5.accountSource = "Manual"
-        hysa5.availableBalance = NSDecimalNumber(value: 22089.78)
-        hysa5.balance = NSDecimalNumber(value: 22089.78)
-        hysa5.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-        hysa5.accountColor = CoreDataService.randomAccountColor()
-//        let hysa6 = Account(context: context)
-//        hysa6.id = UUID()
-//        hysa6.externalID = "act5"
-//        hysa6.name = "Apple HYSA"
-//        hysa6.bank = "Apple"
-//        hysa6.accountType = "Cash"
-//        hysa6.accountNumber = "4567"
-//        hysa6.accountSource = "Manual"
-//        hysa6.availableBalance = NSDecimalNumber(value: 22089.78)
-//        hysa6.balance = NSDecimalNumber(value: 22089.78)
-//        hysa6.balanceDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())
-//        hysa6.accountColor = CoreDataService.randomAccountColor()
 
         let abe401k = Account(context: context)
         abe401k.id = UUID()
@@ -340,16 +267,16 @@ struct PersistenceController {
     static var previewDebitAccount: Account {
         let context = preview.container.viewContext
         let request = Account.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", "act1")
+        request.predicate = NSPredicate(format: "externalID == %@", "act1")
         request.fetchLimit = 1
         return (try? context.fetch(request))?.first ?? Account(context: context)
     }
-    
+
     @MainActor
     static var previewCreditAccount: Account {
         let context = preview.container.viewContext
         let request = Account.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", "act3")
+        request.predicate = NSPredicate(format: "externalID == %@", "act3")
         request.fetchLimit = 1
         return (try? context.fetch(request))?.first ?? Account(context: context)
     }
