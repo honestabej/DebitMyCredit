@@ -7,6 +7,7 @@ struct MainTabView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var lastBackgroundTime: Date?
+    @State private var currentSimpleFINMessage: String? = nil
 
     enum Tab: Hashable {
         case accounts
@@ -74,6 +75,36 @@ struct MainTabView: View {
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+        }
+        .overlay(alignment: .top) {
+            if let message = currentSimpleFINMessage {
+                Text("SimpleFIN Msg: \(message)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(Color.errorRed)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: currentSimpleFINMessage)
+        .onChange(of: authManager.simpleFINMessages) { _, messages in
+            guard !messages.isEmpty else { return }
+            var remaining = messages
+            func showNext() {
+                guard !remaining.isEmpty else { return }
+                currentSimpleFINMessage = remaining.removeFirst()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    currentSimpleFINMessage = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showNext()
+                    }
+                }
+            }
+            showNext()
+            authManager.simpleFINMessages = []
         }
         .animation(.easeInOut(duration: 0.3), value: authManager.isLoadingUserData)
         .onChange(of: scenePhase) { oldPhase, newPhase in

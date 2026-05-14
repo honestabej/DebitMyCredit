@@ -21,6 +21,7 @@ class AuthManager: ObservableObject {
     @Published var isRefreshing: Bool = false
     @Published var isSyncingSimpleFIN: Bool = false
     @Published var isLoadingUserData: Bool = false
+    @Published var simpleFINMessages: [String] = []
     
     
     private let viewContext: NSManagedObjectContext
@@ -137,12 +138,17 @@ class AuthManager: ObservableObject {
             let response = try await APIService.shared.syncBankConnections(token: token)
             print("[AuthManager] SimpleFIN sync status: \(response.message)")
             
+            // Surface any SimpleFIN error messages
+            if let errors = response.stats?.simpleFin?.errors, !errors.isEmpty {
+                simpleFINMessages = errors
+            }
+
             // Indicate SimpleFIN syncing is complete
             isSyncingSimpleFIN = false
-            
+
         } catch {
             print("[AuthManager] Failed to trigger sync: \(error.localizedDescription)")
-            
+
             // Indicate SimpleFIN syncing is complete
             isSyncingSimpleFIN = false
         }

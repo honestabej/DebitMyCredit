@@ -25,7 +25,8 @@ extension Color {
 //    static let appGreen = Color(hex: "#40C174")
     static let appGreen = Color(hex: "#1B3D28")
     static let appYellow = Color(hex: "#F4B552")
-    static let lightBackground = Color(hex: "F4F1EB")
+    static let lightBackground = Color(hex: "#F4F1EB")
+    static let errorRed = Color(hex: "#751423")
     
     // Bank Colors
     static let WellsFargoRed = Color(hex: "#B31E30")

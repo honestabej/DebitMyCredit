@@ -370,6 +370,7 @@ class APIModels {
             let accountsAdded: Int?
             let transactionsInserted: Int?
             let pendingTransactionsRemoved: Int?
+            let errors: [String]?
         }
     }
 }

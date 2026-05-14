@@ -9,11 +9,16 @@ struct RootView: View {
         if authManager.isLoggedIn {
             MainTabView()
         } else {
-            if showRegister {
-                RegisterView(showRegister: $showRegister)
-            } else {
-                LoginView(showRegister: $showRegister)
+            ZStack {
+                if showRegister {
+                    RegisterView(showRegister: $showRegister)
+                        .transition(.opacity)
+                } else {
+                    LoginView(showRegister: $showRegister)
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeInOut(duration: 0.25), value: showRegister)
         }
     }
 }

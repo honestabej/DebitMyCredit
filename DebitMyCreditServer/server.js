@@ -208,6 +208,7 @@ async function syncSimpleFinDataForUser(user) {
   );
 
   const accounts = simpleFinResponse.data.accounts;
+  const simpleFinErrors = simpleFinResponse.data.errors || [];
   console.log(`[SYNC] User ${user.id}: Fetched ${accounts.length} accounts from SimpleFin`);
 
   // Process accounts and transactions within a database transaction
@@ -403,7 +404,7 @@ async function syncSimpleFinDataForUser(user) {
       }
 
       await transaction.commit();
-      return { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved };
+      return { accountsUpdated, accountsAdded, transactionsInserted, pendingTransactionsRemoved, errors: simpleFinErrors };
 
     } catch (dbErr) {
       await transaction.rollback();

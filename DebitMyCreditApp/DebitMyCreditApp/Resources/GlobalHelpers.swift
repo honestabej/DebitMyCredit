@@ -43,6 +43,10 @@ func getBankCircleLogo(bankName: String) -> String {
         return "Discover-Circle-Logo"
     } else if bankName.lowercased().contains("apple") {
         return "Apple-Circle-Logo"
+    } else if bankName.lowercased().contains("fidelity") {
+        return "Fidelity-Circle-Logo"
+    } else if bankName.lowercased().contains("adp") {
+        return "ADP-Circle-Logo"
     // TODO: Add more banks
     } else {
         return "Default-Circle-Logo"
