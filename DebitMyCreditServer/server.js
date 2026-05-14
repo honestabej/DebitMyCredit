@@ -338,11 +338,11 @@ async function syncSimpleFinDataForUser(user) {
 
         // Insert/update transactions
         if (account.transactions) {
-          console.log(`[SYNC:SimpleFIN] Account "${account.name || account.id}" has ${account.transactions.length} transactions from SimpleFIN:`);
-          account.transactions.forEach(txn => {
-            const txnDate = txn.posted ? new Date(txn.posted * 1000).toISOString() : 'no date';
-            console.log(`  - [${txnDate}] "${txn.payee || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.pending || false})`);
-          });
+          // console.log(`[SYNC:SimpleFIN] Account "${account.name || account.id}" has ${account.transactions.length} transactions from SimpleFIN:`);
+          // account.transactions.forEach(txn => {
+          //   const txnDate = txn.posted ? new Date(txn.posted * 1000).toISOString() : 'no date';
+          //   console.log(`  - [${txnDate}] "${txn.payee || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.pending || false})`);
+          // });
 
           for (const txn of account.transactions) {
             const existingTxn = await new sql.Request(transaction)
@@ -622,12 +622,12 @@ async function syncLunchFlowDataForUser(user) {
           }
         }
 
-        // Insert/update transactions
-        console.log(`[SYNC:LunchFlow] Account "${account.name || account.id}" has ${lfTxns.length} transactions from Lunch Flow:`);
-        lfTxns.forEach(txn => {
-          const txnDate = txn.date ? new Date(txn.date).toISOString() : 'no date';
-          console.log(`  - [${txnDate}] "${txn.merchant || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.isPending || false})`);
-        });
+        // // Insert/update transactions
+        // console.log(`[SYNC:LunchFlow] Account "${account.name || account.id}" has ${lfTxns.length} transactions from Lunch Flow:`);
+        // lfTxns.forEach(txn => {
+        //   const txnDate = txn.date ? new Date(txn.date).toISOString() : 'no date';
+        //   console.log(`  - [${txnDate}] "${txn.merchant || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.isPending || false})`);
+        // });
 
         for (const txn of lfTxns) {
           if (!txn.id) continue;
