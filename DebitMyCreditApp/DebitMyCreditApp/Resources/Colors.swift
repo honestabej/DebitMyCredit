@@ -33,6 +33,8 @@ extension Color {
     static let ChaseBlue = Color(hex: "#005EB8")
     static let DiscoverOrange = Color(hex: "#FB8C13")
     static let AppleGrey = Color(hex: "A2AAAD")
+    static let ADPRed = Color(hex: "#D13326")
+    static let FidelityGreen = Color(hex: "#4D8536")
 }
 
 // Default background gradients

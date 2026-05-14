@@ -11,6 +11,10 @@ func getBankColor(bankName: String) -> Color {
         return Color.DiscoverOrange
     } else if bankName.lowercased().contains("apple") {
         return Color.AppleGrey
+    } else if bankName.lowercased().contains("fidelity") {
+        return Color.FidelityGreen
+    } else if bankName.lowercased().contains("adp") {
+        return Color.ADPRed
     // TODO: Add more banks
     } else {
         return Color.appPurple
