@@ -8,7 +8,13 @@ struct TransactionsView: View {
     @State private var selectedAccount: Account? = nil
     @State private var showCardPicker = false
     @State private var showFilterView = false
-    @State private var filterShowsCustomRange = false
+    @State private var filterStartDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var filterEndDate: Date = Date()
+    @State private var filterRangeOption: TransactionsView.RangeOption = .last30
+
+    enum RangeOption {
+        case last30, ytd, all, custom
+    }
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Account.name, ascending: true)],
@@ -31,7 +37,6 @@ struct TransactionsView: View {
     var body: some View {
         ZStack () {
             // Background gradient
-//            AppGradients.horizontalGradient.ignoresSafeArea()
             Color.appGreen.ignoresSafeArea()
             
             // White background behind tab bar
@@ -55,9 +60,23 @@ struct TransactionsView: View {
                         .padding(.top, 3)
                     
                     // Dont show refresh button if a refresh is currently taking place
-                    if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
-                        HStack {
-                            Spacer()
+                    
+                    HStack {
+                        // Filter button
+                        Button {
+                            showFilterView = true
+                        } label: {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                                .foregroundStyle(.white)
+                                .padding(.leading, 20)
+                                .padding(.top, 3)
+                                .font(.system(size: 23))
+                        }
+                        
+                        Spacer()
+                        
+                        // Refresh button
+                        if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
                             Button(action: {
                                 Task { await authManager.refreshData() }
                             }) {
@@ -71,23 +90,8 @@ struct TransactionsView: View {
                     }
                 }
                 
-                    
-                
-                Spacer().frame(height: 25)
-                
-                HStack {
-                    Spacer()
-
-                    Button {
-                        showFilterView = true
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                            .foregroundStyle(Color.appOrange)
-                            .padding(.trailing, 15)
-                            .font(.system(size: 23))
-                    }
-                }
-                .frame(maxWidth: .infinity)
+                // Spacer to start the list at the correct spot
+                Spacer().frame(height: 20)
                 
                 transactionsList
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,23 +102,50 @@ struct TransactionsView: View {
             // Force creditAccounts fetch to execute immediately so the popover opens without delay
             _ = creditAccounts.count
         }
-        .onChange(of: selectedAccount) { _, account in
-            if let account = account {
-                transactions.nsPredicate = NSPredicate(format: "account == %@", account)
-            } else {
-                transactions.nsPredicate = NSPredicate(format: "account.accountType == %@", "Credit")
-            }
-        }
+        .onChange(of: selectedAccount) { _, _ in updatePredicate() }
+        .onChange(of: filterStartDate) { _, _ in updatePredicate() }
+        .onChange(of: filterEndDate) { _, _ in updatePredicate() }
+        .onChange(of: filterRangeOption) { _, _ in updatePredicate() }
         .sheet(isPresented: $showFilterView) {
-            NavigationStack {
-                FilterView(selectedAccount: $selectedAccount, accounts: Array(creditAccounts))
-            }
-            .presentationDetents([.height(350)])
-            .presentationDragIndicator(.visible)
+            FilterSheetWrapper(
+                selectedAccount: $selectedAccount,
+                accounts: Array(creditAccounts),
+                startDate: $filterStartDate,
+                endDate: $filterEndDate,
+                rangeOption: $filterRangeOption
+            )
         }
 
     }
     
+    // Update the dates being used to filter the transactions
+    private func updatePredicate() {
+        let calendar = Calendar.current
+        let start: Date
+        let end: Date = calendar.startOfDay(for: filterEndDate).addingTimeInterval(86400) // end of day
+
+        switch filterRangeOption {
+        case .last30:
+            start = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        case .ytd:
+            start = calendar.date(from: calendar.dateComponents([.year], from: Date())) ?? Date()
+        case .all:
+            start = .distantPast
+        case .custom:
+            start = calendar.startOfDay(for: filterStartDate)
+        }
+
+        var predicates: [NSPredicate] = [
+            NSPredicate(format: "transactionDate >= %@ AND transactionDate < %@", start as NSDate, end as NSDate)
+        ]
+        if let account = selectedAccount {
+            predicates.append(NSPredicate(format: "account == %@", account))
+        } else {
+            predicates.append(NSPredicate(format: "account.accountType == %@", "Credit"))
+        }
+        transactions.nsPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+    }
+
     /// Pending transactions, shown at the top regardless of date.
     private var pendingTransactions: [Transaction] {
         transactions.filter { $0.pending }
@@ -141,22 +172,22 @@ struct TransactionsView: View {
                     Section {
                         ForEach(Array(pendingTransactions.enumerated()), id: \.element.objectID) { index, tx in
                             TransactionRow(transaction: tx)
-                                .padding(.horizontal, 15)
-                                .padding(.vertical, 8)
+                                .padding([.vertical, .leading], 8)
+//                                .padding(.leading, 8)
                             if index < pendingTransactions.count - 1 {
                                 Divider()
                             }
                         }
                     } header: {
                         Text("Pending")
-                            .font(.caption)
+                            .font(.system(size: 15))
                             .fontWeight(.semibold)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 2)
-                            .padding(.horizontal, 15)
-                            .background(Color.clear)
+                            .background(Color.lightBackground)
                     }
+                    .padding(.horizontal, 12)
                 }
 
                 // Settled transactions grouped by day
@@ -164,22 +195,21 @@ struct TransactionsView: View {
                     Section {
                         ForEach(Array(group.transactions.enumerated()), id: \.element.objectID) { index, tx in
                             TransactionRow(transaction: tx)
-                                .padding(.horizontal, 15)
-                                .padding(.vertical, 8)
+                                .padding([.vertical, .leading], 8)
                             if index < group.transactions.count - 1 {
                                 Divider()
                             }
                         }
                     } header: {
                         Text(group.day.formatted(.dateTime.month(.wide).day().year()))
-                            .font(.caption)
+                            .font(.system(size: 15))
                             .fontWeight(.semibold)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 2)
-                            .padding(.horizontal, 15)
-                            .background(Color.clear)
+                            .background(Color.lightBackground)
                     }
+                    .padding(.horizontal, 12)
                 }
             }
         }
@@ -187,21 +217,82 @@ struct TransactionsView: View {
         .background(Color.clear)
     }
 
+    // Wrapper that measures FilterView's natural height and sizes the sheet to fit, up to 70% of screen height
+    private struct FilterSheetWrapper: View {
+        @Binding var selectedAccount: Account?
+        let accounts: [Account]
+        @Binding var startDate: Date
+        @Binding var endDate: Date
+        @Binding var rangeOption: TransactionsView.RangeOption
+        @State private var contentHeight: CGFloat = 300
+
+        private var screenHeight: CGFloat {
+            (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.height ?? 852
+        }
+
+        var body: some View {
+            NavigationStack {
+                FilterView(selectedAccount: $selectedAccount, accounts: accounts, contentHeight: $contentHeight, startDate: $startDate, endDate: $endDate, rangeOption: $rangeOption)
+            }
+            .presentationDetents([.height(min(contentHeight, screenHeight * 0.7))])
+            .presentationDragIndicator(.visible)
+            .background(SheetResizeAnimator(height: min(contentHeight, screenHeight * 0.7)))
+        }
+    }
+
+    // Uses UISheetPresentationController.animateChanges to smoothly resize the sheet
+    private struct SheetResizeAnimator: UIViewControllerRepresentable {
+        let height: CGFloat
+
+        func makeUIViewController(context: Context) -> UIViewController {
+            UIViewController()
+        }
+
+        func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+            guard
+                let sheet = uiViewController.parent?.sheetPresentationController
+                    ?? uiViewController.presentingViewController?.presentedViewController?.sheetPresentationController
+            else { return }
+            let detent = UISheetPresentationController.Detent.custom(identifier: .init("dynamic")) { _ in height }
+            sheet.animateChanges {
+                sheet.detents = [detent]
+            }
+        }
+    }
+
     // View to display the filter options
     private struct FilterView: View {
         @Binding var selectedAccount: Account?
         let accounts: [Account]
+        @Binding var contentHeight: CGFloat
+        @Binding var startDate: Date
+        @Binding var endDate: Date
+        @Binding var rangeOption: TransactionsView.RangeOption
 
         private enum RangeOption: String, CaseIterable, Identifiable {
             case last30 = "Last 30 Days"
             case ytd = "Year To Date"
+            case all = "All Time"
             case custom = "Custom Date Range"
             var id: Self { self }
+            var outer: TransactionsView.RangeOption {
+                switch self {
+                case .last30: return .last30
+                case .ytd: return .ytd
+                case .all: return .all
+                case .custom: return .custom
+                }
+            }
         }
 
-        @State private var selected: RangeOption = .last30
-        @State private var startDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        @State private var endDate: Date = Date()
+        private var selected: RangeOption {
+            switch rangeOption {
+            case .last30: return .last30
+            case .ytd: return .ytd
+            case .all: return .all
+            case .custom: return .custom
+            }
+        }
 
         var body: some View {
             VStack(alignment: .leading, spacing: 20) {
@@ -212,7 +303,7 @@ struct TransactionsView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(RangeOption.allCases) { option in
-                            Button(action: { selected = option }) {
+                            Button(action: { withAnimation(.spring(duration: 0.3)) { rangeOption = option.outer } }) {
                                 HStack(spacing: 10) {
                                     Image(systemName: selected == option ? "largecircle.fill.circle" : "circle")
                                         .foregroundStyle(Color.appOrange)
@@ -229,17 +320,46 @@ struct TransactionsView: View {
 
                     if selected == .custom {
                         HStack(spacing: 8) {
-                            DatePicker("", selection: $startDate, in: ...endDate, displayedComponents: .date)
-                                .labelsHidden()
-                                .datePickerStyle(.compact)
+                            ZStack {
+                                // Styled button background — displays the selected date
+                                HStack(spacing: 4) {
+                                    Text(startDate.formatted(.dateTime.month(.abbreviated).day().year()))
+                                        .font(.system(size: 16, weight: .medium))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                                .allowsHitTesting(false)
+
+                                // Invisible picker sits on top to handle taps
+                                DatePicker("", selection: $startDate, in: ...endDate, displayedComponents: .date)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+                                    .colorMultiply(.clear)
+                            }
+
                             Text("to")
                                 .foregroundStyle(.secondary)
-                            DatePicker("", selection: $endDate, in: startDate..., displayedComponents: .date)
-                                .labelsHidden()
-                                .datePickerStyle(.compact)
+
+                            ZStack {
+                                HStack(spacing: 4) {
+                                    Text(endDate.formatted(.dateTime.month(.abbreviated).day().year()))
+                                        .font(.system(size: 16, weight: .medium))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                                .allowsHitTesting(false)
+
+                                DatePicker("", selection: $endDate, in: startDate..., displayedComponents: .date)
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+                                    .colorMultiply(.clear)
+                            }
+
                             Spacer()
                         }
-                        .transition(.opacity)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 
@@ -279,13 +399,20 @@ struct TransactionsView: View {
                     }
                 }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: 30)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.top, 20)
             .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { contentHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in contentHeight = h }
+                }
+            )
         }
     }
 }

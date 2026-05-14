@@ -828,7 +828,7 @@ struct BankConnectionView: View {
                                     }
                                 }
                             }
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !isSaving && !isEditingAnyName { contentHeight = $0 + 50 } }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !isSaving && !isEditingAnyName { contentHeight = $0 + 100 } }
                         }
                         
                         HStack {
@@ -879,6 +879,25 @@ struct BankConnectionView: View {
                             }
                             .disabled(!hasUnsavedChanges)
                         }
+                        
+                        if let url = credentialFormConfig.externalURL {
+                            Button {
+                                openURL(url)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text(credentialFormConfig.externalButtonLabel)
+                                    Image(systemName: "arrow.up.right.square")
+                                        .font(.system(size: 14, weight: .semibold))
+                                }
+                            }
+                            .frame(width: 320, height: 30)
+                            .background(.clear)
+                            .foregroundColor(Color.appOrange)
+                            .cornerRadius(12)
+                            .fontWeight(.medium)
+                            .padding(.top, -8)
+                        }
+                        
                     } else {
                         EmptyAccountsView(connectionType: connectionType)
                             .padding(.top, 25)
@@ -916,15 +935,15 @@ struct BankConnectionView: View {
                                         .font(.system(size: 14, weight: .semibold))
                                 }
                             }
-                            .padding()
                             .frame(width: 320, height: 30)
                             .background(.clear)
                             .foregroundColor(Color.appOrange)
                             .cornerRadius(12)
                             .fontWeight(.medium)
-                            .padding(.bottom, 20)
+                            .padding(.top, -8)
                         }
                     }
+                    .padding(.vertical, 15)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !isSaving { contentHeight = $0 } }
                 }
             }

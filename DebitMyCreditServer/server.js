@@ -338,16 +338,24 @@ async function syncSimpleFinDataForUser(user) {
 
         // Insert/update transactions
         if (account.transactions) {
+          console.log(`[SYNC:SimpleFIN] Account "${account.name || account.id}" has ${account.transactions.length} transactions from SimpleFIN:`);
+          account.transactions.forEach(txn => {
+            const txnDate = txn.posted ? new Date(txn.posted * 1000).toISOString() : 'no date';
+            console.log(`  - [${txnDate}] "${txn.payee || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.pending || false})`);
+          });
+
           for (const txn of account.transactions) {
             const existingTxn = await new sql.Request(transaction)
               .input("txnExternalId", sql.VarChar(100), txn.id)
-              .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId`);
+              .input("txnUserID", sql.UniqueIdentifier, user.id)
+              .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId AND userID = @txnUserID`);
 
             const txnDate = txn.posted
               ? new Date(txn.posted * 1000)
               : new Date();
 
             if (existingTxn.recordset.length === 0) {
+              console.log(`  [SYNC:SimpleFIN] INSERT new txn: "${txn.payee || 'Unknown'}" ${txnDate.toISOString()}`);
               // Insert new transaction
               await new sql.Request(transaction)
                 .input("internalID", sql.UniqueIdentifier, uuidv4())
@@ -615,6 +623,12 @@ async function syncLunchFlowDataForUser(user) {
         }
 
         // Insert/update transactions
+        console.log(`[SYNC:LunchFlow] Account "${account.name || account.id}" has ${lfTxns.length} transactions from Lunch Flow:`);
+        lfTxns.forEach(txn => {
+          const txnDate = txn.date ? new Date(txn.date).toISOString() : 'no date';
+          console.log(`  - [${txnDate}] "${txn.merchant || 'Unknown'}" $${txn.amount} (id: ${txn.id}, pending: ${txn.isPending || false})`);
+        });
+
         for (const txn of lfTxns) {
           if (!txn.id) continue;
 
@@ -624,9 +638,11 @@ async function syncLunchFlowDataForUser(user) {
 
           const existingTxn = await new sql.Request(transaction)
             .input("txnExternalId", sql.VarChar(100), txnExternalId)
-            .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId`);
+            .input("txnUserID", sql.UniqueIdentifier, user.id)
+            .query(`SELECT internalID, pending FROM Transactions WHERE externalID = @txnExternalId AND userID = @txnUserID`);
 
           if (existingTxn.recordset.length === 0) {
+            console.log(`  [SYNC:LunchFlow] INSERT new txn: "${txn.merchant || 'Unknown'}" ${txnDate.toISOString()}`);
             await new sql.Request(transaction)
               .input("internalID", sql.UniqueIdentifier, uuidv4())
               .input("externalID", sql.VarChar(100), txnExternalId)

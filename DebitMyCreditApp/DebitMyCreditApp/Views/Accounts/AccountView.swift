@@ -99,12 +99,12 @@ struct AccountView: View {
                     Spacer()
                     
                     VStack() {
-                        let displayBalance = account.availableBalance
+                        let displayBalance = account.accountType == "Cash" ? account.availableBalance : account.balance
                         Text(displayBalance.map { $0.decimalValue as Decimal }
                             .map { $0.formatted(.currency(code: "USD")) } ?? "")
                             .font(.system(size: 25))
                         
-                        Text("Available")
+                        Text(account.accountType == "Credit" || account.accountType == "Loan" ? "Balance" : "Available")
                             .font(.system(size: 13))
                             .fontWeight(.semibold)
                             .foregroundColor(.gray)
@@ -153,8 +153,6 @@ struct AccountView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .font(.system(size: 20))
                     .fontWeight(.semibold)
-                
-//                Divider()
                 
                 // Transactions table
                 transactionsList

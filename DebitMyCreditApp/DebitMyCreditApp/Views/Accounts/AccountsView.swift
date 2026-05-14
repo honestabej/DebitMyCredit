@@ -76,7 +76,7 @@ struct AccountsView: View {
                     .frame(height: 230)
                 
                 accountsList
-                    .padding(.top, 33)
+                    .padding(.top, 17)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -100,24 +100,19 @@ struct AccountsView: View {
             Section {
                 ForEach(accounts) { account in
                     AccountRow(account: account, useAvailableBalance: title == "Cash")
-                        .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-
-//                    if account != accounts.last {
-//                        Divider()
-//                            .padding(.leading, 20)
-//                    }
                 }
             } header: {
                 Text(title)
-                    .font(.caption)
+                    .font(.system(size: 14))
                     .fontWeight(.semibold)
                     .foregroundColor(.gray)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 2)
+                    .padding(.leading, 8)
                     .background(Color.lightBackground)
             }
+            .padding(.horizontal, 8)
         }
     }
     
