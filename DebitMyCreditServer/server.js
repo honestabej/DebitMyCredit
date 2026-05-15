@@ -2068,13 +2068,12 @@ app.post("/transaction/allocations", authRequired, async (req, res, next) => {
           if (!entry.accountID || entry.amount == null) continue;
 
           await new sql.Request(dbTransaction)
-            .input("id", sql.UniqueIdentifier, uuidv4())
             .input("transactionID", sql.UniqueIdentifier, transactionID)
             .input("accountID", sql.UniqueIdentifier, entry.accountID)
             .input("amount", sql.Decimal(18, 2), parseFloat(entry.amount))
             .query(`
-              INSERT INTO TransactionAllocations (id, transactionInternalID, accountInternalID, amount, createdAt, updatedAt)
-              VALUES (@id, @transactionID, @accountID, @amount, SYSUTCDATETIME(), SYSUTCDATETIME())
+              INSERT INTO TransactionAllocations (transactionInternalID, accountInternalID, amount, createdAt, updatedAt)
+              VALUES (@transactionID, @accountID, @amount, SYSUTCDATETIME(), SYSUTCDATETIME())
             `);
         }
 
