@@ -2026,6 +2026,72 @@ app.post("/update/accounts", authRequired, async (req, res, next) => {
   }
 })
 
+// Save (replace) allocations for a transaction
+app.post("/transaction/allocations", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { transactionID, allocations } = req.body;
+
+    if (!transactionID || !Array.isArray(allocations)) {
+      return res.status(400).json({
+        success: false,
+        message: "transactionID and allocations array are required"
+      });
+    }
+
+    // Verify the transaction belongs to this user before opening a DB transaction
+    const txnExists = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("transactionID", sql.UniqueIdentifier, transactionID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT internalID FROM Transactions WHERE internalID = @transactionID AND userID = @userID`);
+      return result.recordset.length > 0;
+    });
+
+    if (!txnExists) {
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    // Delete existing allocations and insert new ones atomically
+    await queryWithRetry(async (pool) => {
+      const dbTransaction = new sql.Transaction(pool);
+      await dbTransaction.begin();
+
+      try {
+        // Delete all existing allocations for this transaction
+        await new sql.Request(dbTransaction)
+          .input("transactionID", sql.UniqueIdentifier, transactionID)
+          .query(`DELETE FROM TransactionAllocations WHERE transactionInternalID = @transactionID`);
+
+        // Insert each new allocation
+        for (const entry of allocations) {
+          if (!entry.accountID || entry.amount == null) continue;
+
+          await new sql.Request(dbTransaction)
+            .input("id", sql.UniqueIdentifier, uuidv4())
+            .input("transactionID", sql.UniqueIdentifier, transactionID)
+            .input("accountID", sql.UniqueIdentifier, entry.accountID)
+            .input("amount", sql.Decimal(18, 2), parseFloat(entry.amount))
+            .query(`
+              INSERT INTO TransactionAllocations (id, transactionInternalID, accountInternalID, amount, createdAt, updatedAt)
+              VALUES (@id, @transactionID, @accountID, @amount, SYSUTCDATETIME(), SYSUTCDATETIME())
+            `);
+        }
+
+        await dbTransaction.commit();
+      } catch (dbErr) {
+        await dbTransaction.rollback();
+        throw dbErr;
+      }
+    });
+
+    res.json({ success: true, message: "Allocations saved" });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 /*****************************************
  * Global Error Handling
  *****************************************/
