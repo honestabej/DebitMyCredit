@@ -1860,6 +1860,22 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           ORDER BY createdAt ASC
         `);
 
+      // Fetch allocations created in the last 30 days for this user's transactions
+      const allocationsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT
+            ta.transactionInternalID AS transactionID,
+            ta.accountInternalID AS accountID,
+            ta.amount,
+            ta.createdAt,
+            ta.updatedAt
+          FROM TransactionAllocations ta
+          INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
+          WHERE t.userID = @userID
+            AND ta.createdAt >= DATEADD(day, -30, SYSUTCDATETIME())
+        `);
+
       // Fetch user info (including SimpleFin and Lunch Flow connection status)
       const userResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
@@ -1885,7 +1901,8 @@ app.get("/user/data", authRequired, async (req, res, next) => {
         user: userResult.recordset[0] || null,
         accounts: accountsResult.recordset || [],
         transactions: transactionsResult.recordset || [],
-        transferGroups: transferGroupsResult.recordset || []
+        transferGroups: transferGroupsResult.recordset || [],
+        allocations: allocationsResult.recordset || []
       };
     });
 
