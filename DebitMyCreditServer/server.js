@@ -2087,7 +2087,7 @@ app.post("/transaction/allocations", authRequired, async (req, res, next) => {
           await new sql.Request(dbTransaction)
             .input("transactionID", sql.UniqueIdentifier, transactionID)
             .input("accountID", sql.UniqueIdentifier, entry.accountID)
-            .input("amount", sql.Decimal(18, 2), parseFloat(entry.amount))
+            .input("amount", sql.Decimal(18, 2), -Math.abs(parseFloat(entry.amount)))
             .query(`
               INSERT INTO TransactionAllocations (transactionInternalID, accountInternalID, amount, createdAt, updatedAt)
               VALUES (@transactionID, @accountID, @amount, SYSUTCDATETIME(), SYSUTCDATETIME())
