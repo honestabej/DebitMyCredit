@@ -2108,6 +2108,39 @@ app.post("/transaction/allocations", authRequired, async (req, res, next) => {
   }
 });
 
+// Update the note on a transaction
+app.post("/transaction/notes", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { transactionID, notes } = req.body;
+
+    if (!transactionID || notes == null) {
+      return res.status(400).json({ success: false, message: "transactionID and notes are required" });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      return pool.request()
+        .input("transactionID", sql.UniqueIdentifier, transactionID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("notes", sql.NVarChar(sql.MAX), notes)
+        .query(`
+          UPDATE Transactions
+          SET notes = @notes, updatedAt = SYSUTCDATETIME()
+          WHERE internalID = @transactionID AND userID = @userID
+        `);
+    });
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    res.json({ success: true, message: "Note updated" });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 /*****************************************
  * Global Error Handling
  *****************************************/
