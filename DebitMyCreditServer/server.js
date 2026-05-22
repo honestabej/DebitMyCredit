@@ -1569,18 +1569,18 @@ app.post("/disconnect-lunchflow", async (req, res, next) => {
 // Add a new manual account
 app.post("/add-manual-account", async (req, res, next) => {
   try {
-    const { userID, name, balance, bank, accountNumber, availableBalance, accountType, createdAt, updatedAt } = req.body;
+    const { id, userID, name, balance, bank, accountNumber, availableBalance, accountType, createdAt, updatedAt } = req.body;
 
-    if (!userID || !name || balance === undefined || !createdAt || !updatedAt) {
+    if (!id || !userID || !name || balance === undefined || !createdAt || !updatedAt) {
       return res.status(400).json({
         success: false,
-        message: "userID, name, balance, createdAt, and updatedAt are required"
+        message: "id, userID, name, balance, createdAt, and updatedAt are required"
       });
     }
 
     const account = await queryWithRetry(async (pool) => {
-      const internalID = uuidv4();
-      const externalID = internalID; // No external source for manual accounts
+      const internalID = id;
+      const externalID = id; // No external source for manual accounts
       const resolvedAvailableBalance = availableBalance ?? balance;
 
       await pool.request()
@@ -1854,7 +1854,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const transferGroupsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, createdAt, updatedAt
+          SELECT id, name, completed, createdAt, updatedAt
           FROM TransferGroups
           WHERE userID = @userID
           ORDER BY createdAt ASC
@@ -2135,6 +2135,113 @@ app.post("/transaction/notes", authRequired, async (req, res, next) => {
     }
 
     res.json({ success: true, message: "Note updated" });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/payment-group/create", authRequired, async (req, res, next) => {
+  try {
+    const { id, userID, name, transactionIDs, completed, createdAt, updatedAt } = req.body;
+
+    if (!id || !userID || !name || !createdAt || !updatedAt) {
+      return res.status(400).json({
+        success: false,
+        message: "id, userID, name, createdAt, and updatedAt are all required"
+      });
+    }
+
+    const paymentGroup = await queryWithRetry(async (pool) => {
+      // Create the new TransferGroup row
+      await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("name", sql.NVarChar(255), name)
+        .input("completed", sql.Bit, completed ? 1 : 0)
+        .input("createdAt", sql.DateTimeOffset, createdAt)
+        .input("updatedAt", sql.DateTimeOffset, updatedAt)
+        .query(`
+          INSERT INTO TransferGroups (
+            id, userID, name, completed, createdAt, updatedAt
+          )
+          VALUES (
+            @id, @userID, @name, @completed, @createdAt, @updatedAt
+          )
+        `);
+
+      // Update the transferGroupID of each transaction in the group
+      const txnIDs = Array.isArray(transactionIDs) ? transactionIDs : [];
+      for (const transactionID of txnIDs) {
+        await pool.request()
+          .input("id", sql.UniqueIdentifier, id)
+          .input("transactionID", sql.UniqueIdentifier, transactionID)
+          .query(`
+            UPDATE Transactions
+              SET transferGroupID = @id,
+                  updatedAt = SYSUTCDATETIME()
+              WHERE internalID = @transactionID
+          `);
+      }
+
+      // Return the newly created payment group
+      const result = await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .query(`
+          SELECT id, name, completed, createdAt, updatedAt
+          FROM TransferGroups
+          WHERE id = @id
+        `);
+
+      return result.recordset[0];
+    });
+
+    res.json({
+      success: true,
+      message: "Payment group created"
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/payment-group/delete", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "id is required" });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      // Unlink any transactions that belong to this group
+      await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE Transactions
+          SET transferGroupID = NULL, updatedAt = SYSUTCDATETIME()
+          WHERE transferGroupID = @id AND userID = @userID
+        `);
+
+      const deleteResult = await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          DELETE FROM TransferGroups
+          WHERE id = @id AND userID = @userID AND name != 'Manual'
+        `);
+
+      return { rowsAffected: deleteResult.rowsAffected[0] };
+    });
+
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({ success: false, message: "Payment group not found or cannot be deleted" });
+    }
+
+    res.json({ success: true, message: "Payment group deleted" });
 
   } catch (err) {
     next(err);
