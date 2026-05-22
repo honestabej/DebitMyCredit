@@ -1836,6 +1836,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
             t.internalID AS id,
             t.externalID,
             t.accountInternalID AS accountID,
+            t.transferGroupID,
             t.amount,
             t.name,
             t.notes,
