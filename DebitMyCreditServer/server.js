@@ -1846,7 +1846,6 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           FROM Transactions t
           INNER JOIN Accounts a ON t.accountInternalID = a.internalID
           WHERE t.userID = @userID
-            AND t.transactionDate >= DATEADD(day, -30, SYSUTCDATETIME())
           ORDER BY t.transactionDate DESC, t.createdAt DESC
         `);
 
@@ -1860,7 +1859,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           ORDER BY createdAt ASC
         `);
 
-      // Fetch allocations created in the last 30 days for this user's transactions
+      // Fetch all allocations for this user's transactions
       const allocationsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
@@ -1873,7 +1872,6 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           FROM TransactionAllocations ta
           INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
           WHERE t.userID = @userID
-            AND ta.createdAt >= DATEADD(day, -30, SYSUTCDATETIME())
         `);
 
       // Fetch user info (including SimpleFin and Lunch Flow connection status)
