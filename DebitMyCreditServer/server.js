@@ -1044,9 +1044,10 @@ app.post("/register", async (req, res, next) => {
         .input("tgid", sql.VarChar(50), tgid)
         .input("userID", sql.VarChar(50), id)
         .input("name", sql.VarChar(255), "Manual")
+        .input("completed", sql.Bit, 1)
         .query(`
-          INSERT INTO TransferGroups (id, userID, name)
-          VALUES (@tgid, @userID, @name)
+          INSERT INTO TransferGroups (id, userID, name, completed)
+          VALUES (@tgid, @userID, @name, @completed)
         `);
 
       // Fetch the newly created user to return to the client
