@@ -2140,6 +2140,38 @@ app.post("/transaction/notes", authRequired, async (req, res, next) => {
   }
 });
 
+app.post("/transaction/transfer-group", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { transactionID, transferGroupID } = req.body;
+
+    if (!transactionID) {
+      return res.status(400).json({ success: false, message: "transactionID is required" });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      return pool.request()
+        .input("transactionID", sql.UniqueIdentifier, transactionID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("transferGroupID", sql.UniqueIdentifier, transferGroupID || null)
+        .query(`
+          UPDATE Transactions
+          SET transferGroupID = @transferGroupID, updatedAt = SYSUTCDATETIME()
+          WHERE internalID = @transactionID AND userID = @userID
+        `);
+    });
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    res.json({ success: true, message: "Transfer group updated" });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post("/payment-group/create", authRequired, async (req, res, next) => {
   try {
     const { id, userID, name, transactionIDs, completed, createdAt, updatedAt } = req.body;
