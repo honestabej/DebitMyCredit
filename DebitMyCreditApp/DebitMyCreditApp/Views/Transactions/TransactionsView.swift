@@ -25,7 +25,11 @@ struct TransactionsView: View {
 
     @FetchRequest(
         sortDescriptors: [NSSortDescriptor(keyPath: \Transaction.transactionDate, ascending: false)],
-        predicate: NSPredicate(format: "account.accountType == %@", "Credit"),
+        predicate: NSPredicate(
+            format: "account.accountType == %@ AND amount < 0 AND transactionDate >= %@",
+            "Credit",
+            Calendar.current.date(byAdding: .day, value: -30, to: Date())! as NSDate
+        ),
         animation: .default
     )
     private var transactions: FetchedResults<Transaction>
@@ -35,72 +39,26 @@ struct TransactionsView: View {
     }
     
     var body: some View {
-        ZStack () {
-            // Background gradient
+        // Background Color layer
+        ZStack {
             Color.appGreen.ignoresSafeArea()
-            
-            // White background behind tab bar
-            VStack {}
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.lightBackground)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
-                .ignoresSafeArea(edges: .bottom)
-                .padding(.top, 45)
             
             // Actual Content
             VStack {
-                // The area above the white space holding the accounts
-                ZStack {
-                    Text("Credit Transactions")
-                        .font(.system(size: 25))
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.white)
-                        .padding(.top, 3)
-                    
-                    // Dont show refresh button if a refresh is currently taking place
-                    
-                    HStack {
-                        // Filter button
-                        Button {
-                            showFilterView = true
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                                .foregroundStyle(.white)
-                                .padding(.leading, 20)
-                                .padding(.top, 3)
-                                .font(.system(size: 23))
-                        }
-                        
-                        Spacer()
-                        
-                        // Refresh button
-                        if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
-                            Button(action: {
-                                Task { await authManager.refreshData() }
-                            }) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .padding(.trailing, 20)
-                            .padding(.top, 3)
-                        }
-                    }
-                }
+                PageHeaderView(title: "Credit Transactions", leftButton: FilterButton, includeRefresh: true)
                 
-                // Spacer to start the list at the correct spot
-                Spacer().frame(height: 20)
-                
+                // Transaction list area
                 transactionsList
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
+                    .background(Color.lightBackground)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
+                    .ignoresSafeArea(edges: .bottom)
             }
         }
         .onAppear {
             // Force creditAccounts fetch to execute immediately so the popover opens without delay
             _ = creditAccounts.count
+            updatePredicate()
         }
         .onChange(of: selectedAccount) { _, _ in updatePredicate() }
         .onChange(of: filterStartDate) { _, _ in updatePredicate() }
@@ -118,51 +76,19 @@ struct TransactionsView: View {
 
     }
     
-    // Update the dates being used to filter the transactions
-    private func updatePredicate() {
-        let calendar = Calendar.current
-        let start: Date
-        let end: Date = calendar.startOfDay(for: filterEndDate).addingTimeInterval(86400) // end of day
-
-        switch filterRangeOption {
-        case .last30:
-            start = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        case .ytd:
-            start = calendar.date(from: calendar.dateComponents([.year], from: Date())) ?? Date()
-        case .all:
-            start = .distantPast
-        case .custom:
-            start = calendar.startOfDay(for: filterStartDate)
+    // Filter button to pass into header
+    private var FilterButton: some View {
+        Button {
+            showFilterView = true
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(.white)
+                .padding(.leading, 20)
+                .padding(.top, 3)
+                .font(.system(size: 23))
         }
-
-        var predicates: [NSPredicate] = [
-            NSPredicate(format: "transactionDate >= %@ AND transactionDate < %@", start as NSDate, end as NSDate)
-        ]
-        if let account = selectedAccount {
-            predicates.append(NSPredicate(format: "account == %@", account))
-        } else {
-            predicates.append(NSPredicate(format: "account.accountType == %@", "Credit"))
-        }
-        transactions.nsPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
     }
-
-    /// Pending transactions, shown at the top regardless of date.
-    private var pendingTransactions: [Transaction] {
-        transactions.filter { $0.pending }
-    }
-
-    /// Non-pending transactions grouped by calendar day, newest day first.
-    private var settledTransactionsByDay: [(day: Date, transactions: [Transaction])] {
-        let calendar = Calendar.current
-        let settled = transactions.filter { !$0.pending }
-        let grouped = Dictionary(grouping: settled) { tx -> Date in
-            calendar.startOfDay(for: tx.transactionDate ?? .distantPast)
-        }
-        return grouped
-            .sorted { $0.key > $1.key }
-            .map { (day: $0.key, transactions: $0.value) }
-    }
-
+    
     // View to display the list of transactions grouped by pending then by date
     private var transactionsList: some View {
         ScrollView {
@@ -173,7 +99,6 @@ struct TransactionsView: View {
                         ForEach(Array(pendingTransactions.enumerated()), id: \.element.objectID) { index, tx in
                             TransactionRow(transaction: tx)
                                 .padding([.vertical, .leading], 8)
-//                                .padding(.leading, 8)
                             if index < pendingTransactions.count - 1 {
                                 Divider()
                             }
@@ -184,7 +109,6 @@ struct TransactionsView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 2)
                             .background(Color.lightBackground)
                     }
                     .padding(.horizontal, 12)
@@ -206,7 +130,6 @@ struct TransactionsView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 2)
                             .background(Color.lightBackground)
                     }
                     .padding(.horizontal, 12)
@@ -215,8 +138,10 @@ struct TransactionsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color.clear)
+        .padding(.top, 10)
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 83) }
     }
-
+    
     // Wrapper that measures FilterView's natural height and sizes the sheet to fit, up to 70% of screen height
     private struct FilterSheetWrapper: View {
         @Binding var selectedAccount: Account?
@@ -239,27 +164,7 @@ struct TransactionsView: View {
             .background(SheetResizeAnimator(height: min(contentHeight, screenHeight * 0.7)))
         }
     }
-
-    // Uses UISheetPresentationController.animateChanges to smoothly resize the sheet
-    private struct SheetResizeAnimator: UIViewControllerRepresentable {
-        let height: CGFloat
-
-        func makeUIViewController(context: Context) -> UIViewController {
-            UIViewController()
-        }
-
-        func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-            guard
-                let sheet = uiViewController.parent?.sheetPresentationController
-                    ?? uiViewController.presentingViewController?.presentedViewController?.sheetPresentationController
-            else { return }
-            let detent = UISheetPresentationController.Detent.custom(identifier: .init("dynamic")) { _ in height }
-            sheet.animateChanges {
-                sheet.detents = [detent]
-            }
-        }
-    }
-
+    
     // View to display the filter options
     private struct FilterView: View {
         @Binding var selectedAccount: Account?
@@ -415,17 +320,85 @@ struct TransactionsView: View {
             )
         }
     }
+    
+    // Update the dates being used to filter the transactions
+    private func updatePredicate() {
+        let calendar = Calendar.current
+        let start: Date
+        let end: Date = calendar.startOfDay(for: filterEndDate).addingTimeInterval(86400) // end of day
+
+        switch filterRangeOption {
+        case .last30:
+            start = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        case .ytd:
+            start = calendar.date(from: calendar.dateComponents([.year], from: Date())) ?? Date()
+        case .all:
+            start = .distantPast
+        case .custom:
+            start = calendar.startOfDay(for: filterStartDate)
+        }
+
+        var predicates: [NSPredicate] = [
+            NSPredicate(format: "transactionDate >= %@ AND transactionDate < %@", start as NSDate, end as NSDate),
+            NSPredicate(format: "amount < 0")
+        ]
+        if let account = selectedAccount {
+            predicates.append(NSPredicate(format: "account == %@", account))
+        } else {
+            predicates.append(NSPredicate(format: "account.accountType == %@", "Credit"))
+        }
+        transactions.nsPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+    }
+
+    // Pending transactions, shown at the top regardless of date.
+    private var pendingTransactions: [Transaction] {
+        transactions.filter { $0.pending }
+    }
+
+    // Non-pending transactions grouped by calendar day, newest day first.
+    private var settledTransactionsByDay: [(day: Date, transactions: [Transaction])] {
+        let calendar = Calendar.current
+        let settled = transactions.filter { !$0.pending }
+        let grouped = Dictionary(grouping: settled) { tx -> Date in
+            calendar.startOfDay(for: tx.transactionDate ?? .distantPast)
+        }
+        return grouped
+            .sorted { $0.key > $1.key }
+            .map { (day: $0.key, transactions: $0.value) }
+    }
+
+    // Uses UISheetPresentationController.animateChanges to smoothly resize the sheet
+    private struct SheetResizeAnimator: UIViewControllerRepresentable {
+        let height: CGFloat
+
+        func makeUIViewController(context: Context) -> UIViewController {
+            UIViewController()
+        }
+
+        func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+            guard
+                let sheet = uiViewController.parent?.sheetPresentationController
+                    ?? uiViewController.presentingViewController?.presentedViewController?.sheetPresentationController
+            else { return }
+            let detent = UISheetPresentationController.Detent.custom(identifier: .init("dynamic")) { _ in height }
+            sheet.animateChanges {
+                sheet.detents = [detent]
+            }
+        }
+    }
 }
 
 // MARK: View for each row displaying a transactions
 struct TransactionRow: View {
+    @EnvironmentObject var authManager: AuthManager
     @ObservedObject var transaction: Transaction
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showTransactionDetail = false
+    var fromPaymentGroup: Bool = false
 
     var body: some View {
 
-        Button(action: { showTransactionDetail = true }) {
+        Button(action: { if (!fromPaymentGroup) { showTransactionDetail = true }}) {
             VStack(spacing: 5) {
                 // Top row containing account details and the transfer group
                 HStack() {
@@ -447,12 +420,14 @@ struct TransactionRow: View {
                     
                     Spacer ()
                     
-                    let tgName = transaction.transferGroup?.name ?? "--"
-                    Text("Pay Group: \(tgName)")
-                        .font(.caption)
-                        .fontWeight(.light)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    if (!fromPaymentGroup) {
+                        let tgName = transaction.transferGroup?.name ?? "--"
+                        Text("Pay Group: \(tgName)")
+                            .font(.caption)
+                            .fontWeight(.light)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                     
                 }
                 
@@ -492,18 +467,7 @@ struct TransactionRow: View {
                     } else {
                         ForEach(allocations, id: \.objectID) { allocation in
                             if let account = allocation.account {
-                                HStack(spacing: 4) {
-                                    Text(account.name ?? "")
-                                        .font(.caption2)
-                                        .fontWeight(.medium)
-                                        .lineLimit(1)
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    Color(hex: account.accountColor ?? "#BDBDBD").opacity(0.41)
-                                )
-                                .clipShape(Capsule())
+                                AllocationChip(account: account)
                             }
                         }
                     }
@@ -511,20 +475,74 @@ struct TransactionRow: View {
                 }
                 .padding(.horizontal, 5)
                 
+                // Delete orphaned pending transaction
+                if transaction.isOrphaned {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Transaction no longer exists")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.black)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            viewContext.delete(transaction)
+                            try? viewContext.save()
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.red.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                }
             }
             .foregroundColor(transaction.pending ? .secondary : .primary)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showTransactionDetail) {
-            TransactionView()
+            TransactionView(transaction: transaction)
                 .environment(\.managedObjectContext, viewContext)
+                .presentationDetents(transaction.account?.accountType == "Credit" ? [.height(650)] : [.height(300)])
                 .presentationDragIndicator(.visible)
+            
         }
-    }
+        .alert("Save Error", isPresented: Binding(
+            get: { authManager.allocationSaveError != nil },
+            set: { if !$0 { authManager.allocationSaveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { authManager.allocationSaveError = nil }
+        } message: {
+            Text(authManager.allocationSaveError ?? "")
+        }
+    } // body
 }
 
 
+
+private struct AllocationChip: View {
+    @ObservedObject var account: Account
+
+    var body: some View {
+        Text(account.name ?? "")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color(hex: account.accountColor ?? "#BDBDBD").opacity(0.41))
+            .clipShape(Capsule())
+    }
+}
 
 #Preview("With Data") {
     let context = PersistenceController.preview.container.viewContext

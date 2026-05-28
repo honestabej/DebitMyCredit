@@ -39,10 +39,10 @@ struct MainTabView: View {
             .tag(Tab.transactions)
 
             NavigationStack {
-                TransfersView()
+                PaymentGroupsView()
             }
             .tabItem {
-                Label("Transfers", systemImage: "arrow.left.arrow.right")
+                Label("Payments", systemImage: "arrow.left.arrow.right")
             }
             .tag(Tab.transfers)
 
@@ -54,7 +54,7 @@ struct MainTabView: View {
             }
             .tag(Tab.settings)
         }
-        .tint(.appRed)
+        .tint(.appOrange)
         .overlay(alignment: .top) {
             // Syncing overlay to display acorss all pages whenever a background sync is happening
             if authManager.isRefreshing || authManager.isSyncingSimpleFIN || authManager.isLoadingUserData {

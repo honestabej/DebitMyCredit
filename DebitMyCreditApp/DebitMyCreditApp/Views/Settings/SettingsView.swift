@@ -13,45 +13,30 @@ struct SettingsView: View {
     @State private var bankConnectionsDetents: Set<PresentationDetent> = [.height(220)]
     
     var body: some View {
+        // Background color
         ZStack {
-            // Background gradient
-//            AppGradients.horizontalGradient.ignoresSafeArea()
             Color.appGreen.ignoresSafeArea()
-            
-            // White background behind tab bar
-            VStack {}
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.lightBackground)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
-                .ignoresSafeArea(edges: .bottom)
-                .padding(.top, 45)
             
             // Actual content
             VStack {
-                Text("Settings")
-                    .font(.system(size: 25))
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.white)
-                    .padding(.top, 3)
+                PageHeaderView(title: "Settings", leftButton: EmptyView?.none, includeRefresh: false)
                 
-                Spacer().frame(height: 40)
-                
-                VStack(spacing: 20) {                    
+                VStack(spacing: 20) {
+                    // Notification toggle row
                     HStack {
                         Toggle("Notifications Enabled: ", isOn: $notificationsEnabled)
                             .onChange(of: notificationsEnabled) { oldValue, newValue in
                                 print("Old:", oldValue)
                                 print("New:", newValue)
                                 // TODO: Notification logic
-                            }.fontWeight(.medium)
-                    }.padding(.horizontal, 20)
+                            }
+                            .fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
                     
-                    // Display account email on button to transition to AccountInfoView
-                    Button {
-                        showingAccountInfoView = true
-                    } label: {
+                    // View edit account info row
+                    Button { showingAccountInfoView = true } label: {
                         HStack {
                             Text("Account Info:").fontWeight(.medium).foregroundColor(.primary)
                             Spacer()
@@ -66,11 +51,9 @@ struct SettingsView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-
-                    // Display connection status on button to transition to SetSimpleFinView
-                    Button {
-                        showingManageBankConnectionsView = true
-                    } label: {
+                    
+                    // Manage bank account connections row
+                    Button { showingManageBankConnectionsView = true } label: {
                         HStack {
                             Text("Manage Bank Connections").fontWeight(.medium).foregroundColor(.primary)
                             Spacer()
@@ -82,9 +65,8 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
                     
-                    Button(role: .destructive) {
-                        showLogOutConfirmation = true
-                    } label: {
+                    // Logout button row
+                    Button(role: .destructive) { showLogOutConfirmation = true } label: {
                         Text("Log Out")
                             .padding()
                             .frame(width: 225, height: 40)
@@ -107,6 +89,9 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.lightBackground)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
+                .ignoresSafeArea(edges: .bottom)
             }
         }
         .sheet(isPresented: $showingAccountInfoView) {

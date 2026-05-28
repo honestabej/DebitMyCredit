@@ -22,6 +22,7 @@ class AuthManager: ObservableObject {
     @Published var isSyncingSimpleFIN: Bool = false
     @Published var isLoadingUserData: Bool = false
     @Published var simpleFINMessages: [String] = []
+    @Published var allocationSaveError: String? = nil
     
     
     private let viewContext: NSManagedObjectContext
@@ -194,6 +195,7 @@ class AuthManager: ObservableObject {
                 accounts: response.accounts,
                 transactions: response.transactions,
                 transferGroups: response.transferGroups,
+                allocations: response.allocations,
                 context: viewContext
             )
             

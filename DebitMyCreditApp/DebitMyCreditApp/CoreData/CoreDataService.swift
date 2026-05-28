@@ -7,7 +7,7 @@ final class CoreDataService {
     private init() {}
 
     // Palette of distinct colors for account color assignment
-    private static let accountColorPalette: [String] = [
+    static let accountColorPalette: [String] = [
         "#FF3B30", // Red
         "#FF9500", // Orange
         "#FFCC00", // Yellow
@@ -102,6 +102,7 @@ final class CoreDataService {
         accounts: [APIModels.Account],
         transactions: [APIModels.UserDataResponse.Transaction],
         transferGroups: [APIModels.UserDataResponse.TransferGroup],
+        allocations: [APIModels.UserDataResponse.Allocation],
         context: NSManagedObjectContext
     ) async {
         await context.perform {
@@ -237,6 +238,21 @@ final class CoreDataService {
                 }
             }
             
+            // Mark any local pending transactions not returned by the server as orphaned
+            let serverTxnIDs = Set(transactions.map { $0.id })
+            let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+            let orphanFetch = Transaction.fetchRequest()
+            orphanFetch.predicate = NSPredicate(
+                format: "pending == YES AND transactionDate >= %@", thirtyDaysAgo as CVarArg
+            )
+            if let pendingLocal = try? context.fetch(orphanFetch) {
+                for localTxn in pendingLocal {
+                    if let id = localTxn.id, !serverTxnIDs.contains(id) {
+                        localTxn.isOrphaned = true
+                    }
+                }
+            }
+
             // 4. Sync Transfer Groups
             for serverGroup in transferGroups {
                 // Convert String ID to UUID
@@ -251,6 +267,7 @@ final class CoreDataService {
                 let localGroup = (try? context.fetch(groupFetch).first) ?? TransferGroup(context: context)
                 localGroup.id = groupUUID
                 localGroup.name = serverGroup.name
+                localGroup.completed = serverGroup.completed
                 
                 // Set the user relationship
                 if let userEntity = userEntity {
@@ -267,12 +284,77 @@ final class CoreDataService {
                 }
             }
             
-            // 5. Save all changes
+            // 4b. Link transactions to their transfer groups
+            for serverTxn in transactions {
+                guard let groupIDString = serverTxn.transferGroupID,
+                      let groupUUID = UUID(uuidString: groupIDString) else {
+                    // No group — clear any stale local link
+                    let txnFetch = Transaction.fetchRequest()
+                    txnFetch.predicate = NSPredicate(format: "id == %@", serverTxn.id as CVarArg)
+                    txnFetch.fetchLimit = 1
+                    if let localTxn = try? context.fetch(txnFetch).first {
+                        localTxn.transferGroup = nil
+                    }
+                    continue
+                }
+
+                let txnFetch = Transaction.fetchRequest()
+                txnFetch.predicate = NSPredicate(format: "id == %@", serverTxn.id as CVarArg)
+                txnFetch.fetchLimit = 1
+                guard let localTxn = try? context.fetch(txnFetch).first else { continue }
+
+                let groupFetch = TransferGroup.fetchRequest()
+                groupFetch.predicate = NSPredicate(format: "id == %@", groupUUID as CVarArg)
+                groupFetch.fetchLimit = 1
+                if let localGroup = try? context.fetch(groupFetch).first {
+                    localTxn.transferGroup = localGroup
+                }
+            }
+
+            // Delete any local TransferGroups not present in the server response
+            let serverGroupIDs = Set(transferGroups.compactMap { UUID(uuidString: $0.id) })
+            let allLocalGroupsFetch = TransferGroup.fetchRequest()
+            if let allLocalGroups = try? context.fetch(allLocalGroupsFetch) {
+                for localGroup in allLocalGroups {
+                    if let id = localGroup.id, !serverGroupIDs.contains(id) {
+                        context.delete(localGroup)
+                        print("[CoreDataService] Deleted stale transfer group: \(localGroup.name ?? "unknown") (id: \(id))")
+                    }
+                }
+            }
+
+            // 5. Sync Allocations — keyed by transaction+account pair
+            for serverAlloc in allocations {
+                let txnFetch = Transaction.fetchRequest()
+                txnFetch.predicate = NSPredicate(format: "id == %@", serverAlloc.transactionID as CVarArg)
+                txnFetch.fetchLimit = 1
+                guard let localTxn = try? context.fetch(txnFetch).first else { continue }
+
+                let accountFetch = Account.fetchRequest()
+                accountFetch.predicate = NSPredicate(format: "id == %@", serverAlloc.accountID as CVarArg)
+                accountFetch.fetchLimit = 1
+                guard let localAccount = try? context.fetch(accountFetch).first else { continue }
+
+                // Find existing allocation by transaction+account composite key
+                let allocFetch = TransactionAllocation.fetchRequest()
+                allocFetch.predicate = NSPredicate(format: "transaction == %@ AND account == %@", localTxn, localAccount)
+                allocFetch.fetchLimit = 1
+
+                let localAlloc = (try? context.fetch(allocFetch).first) ?? TransactionAllocation(context: context)
+                localAlloc.transaction = localTxn
+                localAlloc.account = localAccount
+                localAlloc.amount = NSDecimalNumber(value: serverAlloc.amount)
+
+                if let createdAt = serverAlloc.createdAt?.dateValue { localAlloc.createdAt = createdAt }
+                if let updatedAt = serverAlloc.updatedAt?.dateValue { localAlloc.updatedAt = updatedAt }
+            }
+
+            // 6. Save all changes
             do {
                 if context.hasChanges {
                     print("[CoreDataService] Saving context with changes...")
                     try context.save()
-                    print("[CoreDataService] Successfully saved: \(accounts.count) accounts, \(transactions.count) transactions, \(transferGroups.count) transfer groups, to Core Data")
+                    print("[CoreDataService] Successfully saved: \(accounts.count) accounts, \(transactions.count) transactions, \(transferGroups.count) transfer groups, \(allocations.count) allocations to Core Data")
                 } else {
                     print("[CoreDataService] No changes to save")
                 }

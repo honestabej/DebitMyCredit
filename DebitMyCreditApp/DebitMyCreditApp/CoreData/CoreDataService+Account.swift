@@ -1,5 +1,52 @@
 import CoreData
 
+extension Account {
+    // Sum of all unpaid Credit Transactions of an Account, returned as a positive number
+    func unpaidTransactionsOfAccount(account: Account) -> NSDecimalNumber {
+        guard let managedObjectContext else { return .zero }
+
+        // Fetch any unpaid transactions that are allocated to the given account
+        let request: NSFetchRequest<TransactionAllocation> = NSFetchRequest(entityName: "TransactionAllocation")
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "account == %@", account),
+            NSCompoundPredicate(orPredicateWithSubpredicates: [
+                NSPredicate(format: "transaction.transferGroup == nil"),
+                NSPredicate(format: "transaction.transferGroup.completed == NO")
+            ])
+        ])
+
+        // Handle errors in the coredata fetch
+        guard let allocations = try? managedObjectContext.fetch(request) else {
+            print("[unpaidTransactions] fetch failed for account: \(account.name ?? "unknown")")
+            return .zero
+        }
+
+        // If there are none, return 0
+        guard !allocations.isEmpty else { return .zero }
+
+        // Debug statements
+//        let accountName = account.name ?? "unknown"
+//        print("[unpaidTransactions] \(accountName): Contains \(allocations.count) unpaid Tx ──")
+        
+        // Sum the amount of unpaid transactions to be returned
+        var runningTotal = Decimal(0)
+        for alloc in allocations {
+            let allocAmount = alloc.amount?.decimalValue ?? 0
+            runningTotal += allocAmount
+            
+            // Debug statements
+//            let txnName = alloc.transaction?.name ?? "unknown txn"
+//            let txnAmount = alloc.transaction?.amount?.decimalValue ?? 0
+//            let groupName = alloc.transaction?.transferGroup?.name ?? "nil (no group)"
+//            let completed = alloc.transaction?.transferGroup?.completed ?? false
+//            print("  → \"\(txnName)\" | txnAmount: \(txnAmount) | allocAmount: \(allocAmount) | group: \"\(groupName)\" | completed: \(completed)")
+            
+        }
+
+        return NSDecimalNumber(decimal: abs(runningTotal))
+    }
+}
+
 extension CoreDataService {
     
     // Saves or updates accounts from SimpleFIN API response
@@ -132,6 +179,7 @@ extension CoreDataService {
         ]
     }
     
+    // Get the accounts of each accountSource
     func getAccountsOfAccountSource(context: NSManagedObjectContext, accountSource: String) throws -> [Account] {
         let request: NSFetchRequest<Account> = NSFetchRequest(entityName: "Account")
         request.predicate = NSPredicate(format: "accountSource == %@", accountSource)
@@ -139,13 +187,9 @@ extension CoreDataService {
         return try context.fetch(request)
     }
     
-    // Saves a single account from SimpleFIN API response
+    // Save and return a single account from the API response
     @discardableResult
-    func saveBankConnectionAccount(
-        _ accountData: [String: Any],
-        forUserID userID: UUID,
-        in context: NSManagedObjectContext
-    ) throws -> Account? {
+    func saveBankConnectionAccount(_ accountData: [String: Any], forUserID userID: UUID, in context: NSManagedObjectContext) throws -> Account? {
         try saveBankConnectionAccounts([accountData], forUserID: userID, in: context)
         
         // Return the account we just saved

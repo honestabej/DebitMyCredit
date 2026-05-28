@@ -30,15 +30,26 @@ struct PersistenceController {
         user.updatedAt = Date()
 
         // Transfer groups
+        let manual = TransferGroup(context: context)
+        manual.id = UUID()
+        manual.name = "Manual"
+        manual.createdAt = Date()
+        manual.completed = true
+        manual.user = user
+        
         let tg1 = TransferGroup(context: context)
         tg1.id = UUID()
-        tg1.name = "1"
+        tg1.name = "Payment 1"
         tg1.createdAt = Date()
+        tg1.completed = true
+        tg1.user = user
 
         let tg2 = TransferGroup(context: context)
         tg2.id = UUID()
-        tg2.name = "2"
+        tg2.name = "Payment 2"
         tg2.createdAt = Date()
+        tg2.completed = false
+        tg2.user = user
 
         // Accounts
         let checking = Account(context: context)
@@ -129,7 +140,7 @@ struct PersistenceController {
         shae401k.accountColor = CoreDataService.randomAccountColor()
 
         // Transactions
-        func makeTx(id: String, name: String, amount: Double, daysAgo: Int = 0, pending: Bool = false, account: Account, notes: String? = nil) -> Transaction {
+        func makeTx(id: String, name: String, amount: Double, daysAgo: Int = 0, pending: Bool = false, account: Account, notes: String? = nil, isOrphaned: Bool? = false) -> Transaction {
             let tx = Transaction(context: context)
             tx.id = UUID()
             tx.externalID = id
@@ -138,7 +149,9 @@ struct PersistenceController {
             tx.transactionDate = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date())
             tx.pending = pending
             tx.account = account
+            tx.user = user
             tx.notes = notes
+            tx.isOrphaned = isOrphaned ?? false
             return tx
         }
 
@@ -158,7 +171,7 @@ struct PersistenceController {
         let t11 = makeTx(id: "pt11", name: "Netflix", amount: -15.99, daysAgo: 1, account: chase)
         t11.transferGroup = tg1
 
-        let t12 = makeTx(id: "pt12", name: "Life Cafe", amount: -9.60, pending: true, account: apple)
+        let t12 = makeTx(id: "pt12", name: "Life Cafe", amount: -9.60, pending: true, account: apple, isOrphaned: true)
         t12.transferGroup = tg2
         let t13 = makeTx(id: "pt13", name: "Black Rock Coffee", amount: -7.26, daysAgo: 3, account: apple)
         t13.transferGroup = tg1
@@ -175,8 +188,8 @@ struct PersistenceController {
         makeAllo(tx: t8, account: checking, amount: -51.24)
         makeAllo(tx: t8, account: checking2, amount: -30)
         makeAllo(tx: t9, account: checking, amount: -46.10)
-        makeAllo(tx: t10, account: checking, amount: -16.22)
-        makeAllo(tx: t10, account: checking2, amount: -16.23)
+        makeAllo(tx: t10, account: checking, amount: -28.61)
+        makeAllo(tx: t10, account: checking2, amount: -28.63)
         makeAllo(tx: t11, account: checking, amount: -15.99)
         makeAllo(tx: t12, account: checking, amount: -9.60)
         makeAllo(tx: t13, account: checking, amount: -7.26)

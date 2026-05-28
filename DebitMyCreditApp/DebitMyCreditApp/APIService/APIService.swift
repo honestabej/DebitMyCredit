@@ -59,13 +59,7 @@ class APIService {
     }
     
     // MARK: Reusable function to inititaite API calls
-    func makeRequest<T: Decodable>(
-        endpoint: String = "/",
-        method: HTTPMethod = .get,
-        body: (any Encodable)? = nil,
-        retryCount: Int = 0,
-        token: String? = nil
-    ) async throws -> T {
+    func makeRequest<T: Decodable>(endpoint: String = "/", method: HTTPMethod = .get, body: (any Encodable)? = nil, retryCount: Int = 0, token: String? = nil) async throws -> T {
         print("[APIService] Initiating request to \(baseURL)\(endpoint)")
         
         // Build URL
@@ -263,6 +257,7 @@ class APIService {
     // Add a Manually Tracked account
     func addManualAccount(userID: UUID, account: APIModels.Account, createdAt: String, updatedAt: String) async throws -> APIModels.AddManualAccountResponse {
         let body = APIModels.AddManualAccountRequest(
+            id: account.id,
             userID: userID,
             name: account.name,
             balance: account.balance,
@@ -292,6 +287,23 @@ class APIService {
         let body = APIModels.AccountsToUpdateRequest(userID: userID, accounts: accounts)
         return try await makeRequest(endpoint: "/update/accounts", method: .post, body: body, token: token)
     }
+    
+    // Create a new payment group
+    func createPaymentGroup(paymentGroup: APIModels.CreatePaymentGroup, token: String) async throws -> APIModels.GenericResponse {
+        return try await makeRequest(endpoint: "/payment-group/create", method: .post, body: paymentGroup, token: token)
+    }
+
+    // Delete a payment group
+    func deletePaymentGroup(id: UUID, token: String) async throws -> APIModels.GenericResponse {
+        struct Body: Encodable { let id: UUID }
+        return try await makeRequest(endpoint: "/payment-group/delete", method: .post, body: Body(id: id), token: token)
+    }
+    
+    // Mark a payment group as complete
+    func completePaymentGroup(id: UUID, token: String) async throws -> APIModels.GenericResponse {
+        struct Body: Encodable { let id: UUID }
+        return try await makeRequest(endpoint: "/payment-group/complete", method: .post, body: Body(id: id), token: token)
+    }
 
     // Get server and database status
     func getStatus() async throws -> APIModels.StatusResponse {
@@ -306,5 +318,23 @@ class APIService {
     // Trigger background sync for authenticated user
     func syncBankConnections(token: String) async throws -> APIModels.SyncResponse {
         return try await makeRequest(endpoint: "/user/sync", method: .post, token: token)
+    }
+
+    // Update the note on a transaction
+    func updateTransactionNote(transactionID: String, notes: String, token: String) async throws -> APIModels.UpdateTransactionNoteResponse {
+        let body = APIModels.UpdateTransactionNoteRequest(transactionID: transactionID, notes: notes)
+        return try await makeRequest(endpoint: "/transaction/notes", method: .post, body: body, token: token)
+    }
+
+    // Save transaction allocations
+    func saveAllocations(transactionID: String, allocations: [APIModels.AllocationEntry], token: String) async throws -> APIModels.SaveAllocationsResponse {
+        let body = APIModels.SaveAllocationsRequest(transactionID: transactionID, allocations: allocations)
+        return try await makeRequest(endpoint: "/transaction/allocations", method: .post, body: body, token: token)
+    }
+
+    // Update the transfer group for a transaction (pass nil transferGroupID to clear it)
+    func updateTransactionTransferGroup(transactionID: String, transferGroupID: UUID?, token: String) async throws -> APIModels.GenericResponse {
+        struct Body: Encodable { let transactionID: String; let transferGroupID: String? }
+        return try await makeRequest(endpoint: "/transaction/transfer-group", method: .post, body: Body(transactionID: transactionID, transferGroupID: transferGroupID?.uuidString), token: token)
     }
 }

@@ -47,6 +47,8 @@ struct AccountView: View {
             .map { (day: $0.key, rows: $0.value) }
     }
 
+    @State private var showBalanceBreakdown = false
+
     var body: some View {
         let acctBalDate = account.balanceDate?.formatted(Date.FormatStyle().month(.defaultDigits).day().hour().minute()) ?? "Unknown"
         let bankColor = getBankColor(bankName: account.bank?.lowercased() ?? "")
@@ -58,8 +60,11 @@ struct AccountView: View {
             GeometryReader { geo in
                 LinearGradient(
                     stops: [
-                        .init(color: bankColor.opacity(0.85), location: 0),
-                        .init(color: bankColor.opacity(0), location: 0.35)
+                        // TODO: Implement table
+//                        .init(color: bankColor.opacity(0.85), location: 0),
+//                        .init(color: bankColor.opacity(0), location: 0.35)
+                        .init(color: bankColor.opacity(0.75), location: 0),
+                        .init(color: bankColor.opacity(0), location: 0.20)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -76,6 +81,7 @@ struct AccountView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 30, height: 30)
                         .clipShape(Circle())
+                        .padding(.top, 10) // TODO: Remove after chart implemented
                     
                     Text(account.name ?? "")
                         .fontWeight(.heavy)
@@ -92,51 +98,68 @@ struct AccountView: View {
                     }
                 }
                 
-                AccountBalanceHistoryChart()
-                    .frame(height: 210)
+                // TODO: Implement Chart
+//                AccountBalanceHistoryChart()
+//                    .frame(height: 210)
          
                 HStack() {
                     Spacer()
                     
-                    VStack() {
-                        let displayBalance = account.accountType == "Cash" ? account.availableBalance : account.balance
-                        Text(displayBalance.map { $0.decimalValue as Decimal }
-                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
-                            .font(.system(size: 25))
-                        
-                        Text(account.accountType == "Credit" || account.accountType == "Loan" ? "Balance" : "Available")
-                            .font(.system(size: 13))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.gray)
-                    }
-                    
-                    Spacer()
-                    
-                    if (account.accountType == "Cash") {
-                        VStack() {
-                            Text(account.availableBalance.map { $0.decimalValue as Decimal }
-                                .map { $0.formatted(.currency(code: "USD")) } ?? "")
-                            .font(.system(size: 17))
-                            
-                            Text("Posted")
-                                .font(.system(size: 11))
-                                .fontWeight(.semibold)
-                                .foregroundColor(.gray)
-                            
-                            
-                            Text(account.availableBalance.map { $0.decimalValue as Decimal }
-                                .map { $0.formatted(.currency(code: "USD")) } ?? "")
-                            .font(.system(size: 17))
-                            .padding(.top, 2)
-                            
-                            Text("Unpaid Tx")
-                                .font(.system(size: 11))
+                    let rawBalance = (account.accountType == "Cash" ? account.availableBalance : account.balance)?.decimalValue as Decimal? ?? 0
+                    let unpaid = account.unpaidTransactionsOfAccount(account: account).decimalValue as Decimal
+                    let adjustedBalance = rawBalance - unpaid
+                    HStack(alignment: .top, spacing: 4) {
+                        VStack(spacing: 2) {
+                            Text(adjustedBalance.formatted(.currency(code: "USD")))
+                                .font(.system(size: 25))
+                                .fontWeight(.bold)
+                            Text(account.accountType == "Credit" || account.accountType == "Loan" ? "Balance" : "Available")
+                                .font(.system(size: 13))
                                 .fontWeight(.semibold)
                                 .foregroundColor(.gray)
                         }
-                        
-                        Spacer()
+                        if account.accountType == "Cash" {
+                            Button(action: { showBalanceBreakdown = true }) {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.secondary)
+                            }
+                            .popover(isPresented: $showBalanceBreakdown, arrowEdge: .top) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Breakdown")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.secondary)
+                                    Divider()
+                                    HStack {
+                                        Text("Posted bank balance:")
+                                        Spacer()
+                                        Text(rawBalance.formatted(.currency(code: "USD")))
+                                    }
+                                    HStack {
+                                        Text("Unpaid transactions:")
+                                        Spacer()
+                                        Text("- \(unpaid.formatted(.currency(code: "USD")))")
+                                            .foregroundStyle(unpaid > 0 ? Color.appOrange : .primary)
+                                    }
+                                    Divider()
+                                    HStack {
+                                        Text("Available balance:")
+                                            .fontWeight(.semibold)
+                                        Spacer()
+                                        Text(adjustedBalance.formatted(.currency(code: "USD")))
+                                            .fontWeight(.semibold)
+                                    }
+                                }
+                                .font(.system(size: 13))
+                                .padding(14)
+                                .frame(minWidth: 260)
+                                .presentationCompactAdaptation(.popover)
+                            }
+                        }
                     }
+                    
+                    Spacer()
                 }
                 .padding(.top, 1)
                 
@@ -218,83 +241,106 @@ struct AccountView: View {
 }
 
 struct TransactionRowView: View {
+    @EnvironmentObject var authManager: AuthManager
+    @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var transaction: Transaction
+    @State private var showTransactionDetail = false
     var allocatedAmount: NSDecimalNumber?
     var dbtAcct: Account
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            // Middle row containg the transaction name and the amount
-            HStack(spacing: 10) {
-                Text(transaction.name ?? "")
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(0)
-                    .foregroundColor(transaction.pending ? .secondary : .primary)
-                
-                Spacer(minLength: 8)
-                
-                // Show allocated amount if present, otherwise full transaction amount
-                let displayAmount = allocatedAmount ?? transaction.amount
-                let amountDecimal = displayAmount.map { $0.decimalValue as Decimal }
-                let amountColor: Color = {
-                    guard let val = amountDecimal else { return .primary }
-                    return val < 0 ? .primary : .green
-                }()
-                Text(amountDecimal.map { $0.formatted(.currency(code: "USD")) } ?? "")
-                .fontWeight(.bold)
-                .font(.system(size: 15))
-                .foregroundStyle(transaction.pending ? .secondary : amountColor)
-                .fixedSize()
-                .layoutPriority(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            
-            // Bottom row: only shown when the transaction is from a different account
-            if transaction.account != dbtAcct {
-                HStack(spacing: 4) {
-                    Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 12, height: 12)
-                        .clipShape(Circle())
-                    
-                    Text(transaction.account?.name ?? "")
-                        .truncationMode(.tail)
+        Button (action: { showTransactionDetail = true }) {
+            VStack(alignment: .leading, spacing: 5) {
+                // Middle row containg the transaction name and the amount
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(transaction.name ?? "")
                         .lineLimit(1)
-                        .layoutPriority(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(0)
+                        .foregroundColor(transaction.pending ? .secondary : .primary)
                     
                     Spacer(minLength: 8)
                     
-                    if let tgName = transaction.transferGroup?.name {
-                        Text("Paid: \(tgName)")
+                    // Show allocated amount if present, otherwise full transaction amount
+                    let displayAmount = allocatedAmount ?? transaction.amount
+                    let amountDecimal = displayAmount.map { $0.decimalValue as Decimal }
+                    let amountColor: Color = {
+                        guard let val = amountDecimal else { return .primary }
+                        return val < 0 ? .primary : .green
+                    }()
+                    HStack(spacing: 1) {
+                        Text(amountDecimal.map { $0.formatted(.currency(code: "USD")) } ?? "")
+                            .fontWeight(.bold)
+                            .font(.system(size: 15))
+                            .foregroundStyle(transaction.pending ? .secondary : amountColor)
+                            .fixedSize()
+                        if let allocated = allocatedAmount,
+                           let txAmount = transaction.amount,
+                           abs(allocated.decimalValue as Decimal) != abs(txAmount.decimalValue as Decimal) {
+                            Text("*")
+                                .fontWeight(.bold)
+                                .font(.system(size: 15))
+                                .foregroundStyle(transaction.pending ? .secondary : amountColor)
+                                .fixedSize()
+                        }
+                    }
+                    .layoutPriority(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                // Bottom row: only shown when the transaction is from a different account
+                if transaction.account != dbtAcct {
+                    HStack(spacing: 4) {
+                        Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 12, height: 12)
+                            .clipShape(Circle())
+                        
+                        Text(transaction.account?.name ?? "")
                             .truncationMode(.tail)
                             .lineLimit(1)
-                            .frame(minWidth: 80, alignment: .trailing)
-                            .layoutPriority(0)
-                    } else {
-                        Text("Unpaid")
-                            .foregroundStyle(.orange)
-                            .fixedSize()
+                            .layoutPriority(1)
+                        
+                        Spacer(minLength: 8)
+                        
+                        if let tgName = transaction.transferGroup?.name {
+                            Text("Paid: \(tgName)")
+                                .truncationMode(.tail)
+                                .lineLimit(1)
+                                .frame(minWidth: 80, alignment: .trailing)
+                                .layoutPriority(0)
+                        } else {
+                            Text("Unpaid")
+                                .foregroundStyle(.orange)
+                                .fixedSize()
+                        }
                     }
+                    .padding(.leading, 5)
+                    .font(.caption)
+                    .fontWeight(.light)
+                    .lineLimit(1)
+                    .foregroundStyle(transaction.pending ? .secondary : .primary)
                 }
-                .padding(.leading, 5)
-                .font(.caption)
-                .fontWeight(.light)
-                .lineLimit(1)
-                .foregroundStyle(transaction.pending ? .secondary : .primary)
             }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showTransactionDetail) {
+            TransactionView(transaction: transaction)
+                .environment(\.managedObjectContext, viewContext)
+                .presentationDetents((transaction.account?.accountType == "Credit" && (transaction.amount?.decimalValue ?? 0) < 0) ? [.height(650)] : [.height(300)])
+                .presentationDragIndicator(.visible)
             
-            
-//            if transaction.pending == false && transaction.notes != nil {
-//                Text("\(transaction.notes ?? "")")
-//                    .font(.caption)
-//                    .foregroundColor(.secondary)
-//                    .lineLimit(2)
-//                    .truncationMode(.tail)
-//                    .padding(.leading, 39)
-//                    .padding(.trailing, 15)
-//            }
+        }
+        .alert("Save Error", isPresented: Binding(
+            get: { authManager.allocationSaveError != nil },
+            set: { if !$0 { authManager.allocationSaveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { authManager.allocationSaveError = nil }
+        } message: {
+            Text(authManager.allocationSaveError ?? "")
         }
     }
 }
@@ -305,19 +351,23 @@ struct TransactionRowView: View {
 
 #Preview("Debit Account") {
     let context = PersistenceController.preview.container.viewContext
-    let account = PersistenceController.previewDebitAccount
-    NavigationStack {
+    let request = Account.fetchRequest()
+    request.predicate = NSPredicate(format: "externalID == %@", "act1")
+    request.fetchLimit = 1
+    let account = (try? context.fetch(request))?.first ?? Account(context: context)
+    return NavigationStack {
         AccountView(account: account)
     }
     .environment(\.managedObjectContext, context)
+    .environmentObject(PersistenceController.previewAuthManager())
 }
-
-#Preview("Credit Account") {
-    let context = PersistenceController.preview.container.viewContext
-    let account = PersistenceController.previewCreditAccount
-    NavigationStack {
-        AccountView(account: account)
-    }
-    .environment(\.managedObjectContext, context)
-}
+//
+//#Preview("Credit Account") {
+//    let context = PersistenceController.preview.container.viewContext
+//    let account = PersistenceController.previewCreditAccount
+//    NavigationStack {
+//        AccountView(account: account)
+//    }
+//    .environment(\.managedObjectContext, context)
+//}
 

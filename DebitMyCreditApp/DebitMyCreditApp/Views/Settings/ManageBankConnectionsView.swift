@@ -440,6 +440,9 @@ struct ManualConnectionView: View {
                 Text(successfulMessage)
             }
         }
+        .onAppear() {
+            print(accounts.description)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { _ in
             refreshToken = UUID()
         }
@@ -1501,10 +1504,11 @@ struct ManageAccountRow: View {
     @Binding var pendingEdit: PendingAccountEdit?
     @Binding var isEditingName: Bool
 
+    @Environment(\.managedObjectContext) private var viewContext
     @State private var editingName: String = ""
-    @State private var isEditingNameLocal = false
     @FocusState private var isNameFieldFocused: Bool
     @State private var showTypePicker = false
+    @State private var showColorPicker = false
     @State private var buttonGlobalY: CGFloat = 0
 
     // The screen's vertical midpoint, used to decide which way the type picker popover opens
@@ -1512,11 +1516,6 @@ struct ManageAccountRow: View {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.midY ?? 400
-    }
-
-    // The AccountName that is displayed in the row (before saving)
-    private var displayName: String {
-        pendingEdit?.name ?? account.name ?? ""
     }
 
     // The AccountType that is displayed in the row (before saving)
@@ -1547,47 +1546,68 @@ struct ManageAccountRow: View {
 
             // Display the account name, edit button, number, and time since last update
             VStack(alignment: .leading, spacing: 3) {
-                
-                // Display name and edit button
-                HStack() {
-                    if isEditingNameLocal {
-                        // When editing accountName
-                        TextField("Account name", text: $editingName)
-                            .textFieldStyle(.roundedBorder)
-                            .focused($isNameFieldFocused)
-                            .onSubmit {
-                                commitNameEdit()
-                            }
-                        
-                        Button("Done") {
-                            commitNameEdit()
-                        }
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.blue)
-                    } else {
-                        // When not editing accountName
-                        HStack {
-                            Text(displayName.isEmpty ? "Unknown Account" : displayName)
-                                .fontWeight(.bold)
-                                .font(.system(size: 16))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            
-                            Button(action: {
-                                editingName = displayName
-                                isEditingNameLocal = true
-                                isEditingName = true
-                                isNameFieldFocused = true
-                            }) {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.appPurple)
-                                    .frame(width: 21, height: 21)
-                            }
+
+                HStack(spacing: 5) {
+                    Button {
+                        showColorPicker = true
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: account.accountColor ?? "#007AFF"))
+                                .frame(width: 18, height: 18)
+                            Image(systemName: "pencil")
+                                .font(.system(size: 7, weight: .semibold))
+                                .foregroundColor(.white)
                         }
                     }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showColorPicker) {
+                        let columns = Array(repeating: GridItem(.fixed(36)), count: 5)
+                        LazyVGrid(columns: columns, spacing: 10) {
+                            ForEach(CoreDataService.accountColorPalette, id: \.self) { hex in
+                                Button {
+                                    account.accountColor = hex
+                                    try? viewContext.save()
+                                    showColorPicker = false
+                                } label: {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color(hex: hex))
+                                            .frame(width: 32, height: 32)
+                                        if account.accountColor == hex {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 12, weight: .bold))
+                                                .foregroundColor(.white)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(16)
+                        .presentationCompactAdaptation(.popover)
+                    }
+                    
+                    TextField(account.name ?? "Account name", text: $editingName)
+                        .fontWeight(.bold)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.primary)
+                        .focused($isNameFieldFocused)
+                        .onChange(of: editingName) { _, newValue in
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if pendingEdit == nil {
+                                pendingEdit = PendingAccountEdit(name: trimmed, accountType: displayAccountType)
+                            } else {
+                                pendingEdit?.name = trimmed
+                            }
+                            isEditingName = isNameFieldFocused
+                        }
+                        .onChange(of: isNameFieldFocused) { _, focused in
+                            isEditingName = focused
+                        }
+                        .onAppear {
+                            editingName = pendingEdit?.name ?? account.name ?? ""
+                        }
                 }
                 
                 // Display the account number if available, and the time since last update
@@ -1610,7 +1630,7 @@ struct ManageAccountRow: View {
             }
             
             Spacer()
-            
+
             // Display the drop down to choose the acount type
             Button {
                 showTypePicker = true
@@ -1644,7 +1664,7 @@ struct ManageAccountRow: View {
                         }
                         Button {
                             if pendingEdit == nil {
-                                pendingEdit = PendingAccountEdit(name: displayName, accountType: type)
+                                pendingEdit = PendingAccountEdit(name: editingName, accountType: type)
                             } else {
                                 pendingEdit?.accountType = type
                             }
@@ -1673,22 +1693,6 @@ struct ManageAccountRow: View {
         }
     }
 
-    // Create a pending name change
-    private func commitNameEdit() {
-        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            isEditingNameLocal = false
-            isEditingName = false
-            return
-        }
-        if pendingEdit == nil {
-            pendingEdit = PendingAccountEdit(name: trimmed, accountType: displayAccountType)
-        } else {
-            pendingEdit?.name = trimmed
-        }
-        isEditingNameLocal = false
-        isEditingName = false
-    }
 }
 
 // Wraps any row content with a swipe-left-to-reveal-delete gesture

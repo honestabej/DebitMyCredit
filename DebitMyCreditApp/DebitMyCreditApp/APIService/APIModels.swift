@@ -40,6 +40,7 @@ class APIModels {
         let accounts: [Account]
         let transactions: [Transaction]
         let transferGroups: [TransferGroup]
+        let allocations: [Allocation]
         
         struct UserInfo: Codable {
             let id: String
@@ -77,6 +78,7 @@ class APIModels {
             let id: UUID
             let externalID: String
             let accountID: String
+            let transferGroupID: String?
             let amount: Double
             let name: String
             let notes: String?
@@ -89,6 +91,15 @@ class APIModels {
         struct TransferGroup: Codable {
             let id: String
             let name: String
+            let completed: Bool
+            let createdAt: FlexibleDate?
+            let updatedAt: FlexibleDate?
+        }
+
+        struct Allocation: Codable {
+            let transactionID: UUID
+            let accountID: UUID
+            let amount: Double
             let createdAt: FlexibleDate?
             let updatedAt: FlexibleDate?
         }
@@ -121,6 +132,7 @@ class APIModels {
     }
 
     struct AddManualAccountRequest: Codable {
+        let id: UUID
         let userID: UUID
         let name: String
         let balance: Double
@@ -355,6 +367,43 @@ class APIModels {
         }
     }
     
+    // MARK: Transaction Allocation req/rec models
+    struct AllocationEntry: Codable {
+        let accountID: String
+        let amount: Double
+    }
+
+    struct SaveAllocationsRequest: Codable {
+        let transactionID: String
+        let allocations: [AllocationEntry]
+    }
+
+    struct SaveAllocationsResponse: Codable {
+        let success: Bool
+        let message: String?
+    }
+
+    struct UpdateTransactionNoteRequest: Codable {
+        let transactionID: String
+        let notes: String
+    }
+
+    struct UpdateTransactionNoteResponse: Codable {
+        let success: Bool
+        let message: String?
+    }
+    
+    // MARK: PaymentGroup Models
+    struct CreatePaymentGroup: Codable {
+        let id: UUID
+        let userID: UUID
+        let name: String
+        let transactionIDs: [UUID]
+        let completed: Bool
+        let createdAt: FlexibleDate?
+        let updatedAt: FlexibleDate?
+    }
+
     struct SyncResponse: Codable {
         let success: Bool
         let message: String

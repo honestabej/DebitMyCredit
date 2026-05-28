@@ -31,53 +31,24 @@ struct AccountsView: View {
     }
     
     var body: some View {
+        // Background Color
         ZStack () {
-            // Background gradient
             Color.appGreen.ignoresSafeArea()
-            
-            // White background layer (decorative, extends behind tab bar)
-            VStack {}
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.lightBackground)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
-                .ignoresSafeArea(edges: .bottom)
-                .padding(.top, 295)
             
             // Actual Content
             VStack {
-                // The area above the white space holding the accounts
-                ZStack {
-                    Text("Accounts")
-                        .font(.system(size: 25))
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.white)
-                        .padding(.top, 3)
-                    
-                    // Dont show refresh button if a refresh is currently taking place
-                    if (!authManager.isRefreshing && !authManager.isSyncingSimpleFIN && !authManager.isLoadingUserData) {
-                        HStack {
-                            Spacer()
-                            Button(action: {
-                                Task { await authManager.refreshData() }
-                            }) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            .padding(.trailing, 20)
-                            .padding(.top, 3)
-                        }
-                    }
-                }
+                PageHeaderView(title: "Accounts", leftButton: EmptyView?.none, includeRefresh: true)
                 
-                AccountsBalanceHistoryChart()
-                    .frame(height: 230)
+                // TODO: Implement chart
+//                AccountsBalanceHistoryChart()
+//                    .frame(height: 230)
                 
                 accountsList
-                    .padding(.top, 17)
+                    .padding(.top, 10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.lightBackground)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
+                    .ignoresSafeArea(edges: .bottom)
             }
         }
         
@@ -92,6 +63,7 @@ struct AccountsView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 83) }
     }
 
     @ViewBuilder
@@ -120,49 +92,20 @@ struct AccountsView: View {
 
 struct AccountRow: View {
     @ObservedObject var account: Account
-    var useAvailableBalance: Bool = true
     @Environment(\.managedObjectContext) private var viewContext
     @State private var showAccountDetail = false
+    @State private var refreshToken = UUID()
+    var useAvailableBalance: Bool = true
+
+    private var adjustedBalance: NSDecimalNumber? {
+        guard let balance = useAvailableBalance ? account.availableBalance : account.balance else { return nil }
+        let pending = account.unpaidTransactionsOfAccount(account: account)
+        return balance.subtracting(pending)
+    }
 
     var body: some View {
         Button(action: { showAccountDetail = true }) {
             HStack(alignment: .center, spacing: 10) {
-//                // Card Image
-//                ZStack {
-//                    RoundedRectangle(cornerRadius: 8)
-//                        .fill(getBankColor(bankName: account.bank?.lowercased() ?? ""))
-//                        .frame(width: 110, height: 69)
-//                    
-//                    // Bank logo — top left
-//                    VStack {
-//                        HStack {
-//                            Image(getBankTextLogo(bankName: account.bank?.lowercased() ?? ""))
-//                                .resizable()
-//                                .scaledToFit()
-//                                .frame(maxHeight: 13)
-//                                .padding([.top, .leading], 5)
-//                            Spacer()
-//                        }
-//                        Spacer()
-//                    }
-//                    .frame(width: 100, height: 63)
-//                    
-//                    // Last 4 digits — bottom right
-//                    VStack {
-//                        Spacer()
-//                        HStack {
-//                            Spacer()
-//                            if let acctNum = account.accountNumber, !acctNum.isEmpty {
-//                                Text("•••• \(acctNum)")
-//                                    .font(.system(size: 13, weight: .medium))
-//                                    .foregroundColor(.white)
-//                                    .padding(.bottom, 5)
-//                                    .padding(.trailing, 8)
-//                            }
-//                        }
-//                    }
-//                    .frame(width: 110, height: 69)
-//                }
                 
                 // Display corresponding Bank Logo
                 Image(getBankCircleLogo(bankName: account.bank?.lowercased() ?? ""))
@@ -179,16 +122,7 @@ struct AccountRow: View {
                             .foregroundColor(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-//                        Spacer()
-//                        HStack(spacing: 2) {
-//                            Image(systemName: "clock")
-//                            Text(timeSinceLastUpdate(from: account.balanceDate))
-//                        }
-                        .font(.caption2)
-                        .foregroundColor(Color(uiColor: .gray))
                     }
-                    
-//                    Spacer()
                     
                     // Display the account number if available, and the time since last update
                     HStack {
@@ -207,30 +141,20 @@ struct AccountRow: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     }
-                    
-//                    // Amount + label pairs
-//                    VStack(alignment: .leading, spacing: 2) {
-//                        let displayBalance = useAvailableBalance ? account.availableBalance : account.balance
-//                        Text(displayBalance.map { $0.decimalValue as Decimal }
-//                            .map { $0.formatted(.currency(code: "USD")) } ?? "")
-//                            .font(.system(size: 20))
-//                        
-//                        Text(useAvailableBalance ? "Available" : "Balance")
-//                            .font(.caption)
-//                            .fontWeight(.semibold)
-//                            .foregroundColor(.gray)
-//                            .padding(.top, 1)
-//                    }
                 
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-//                .frame(height: 69)
                 
-                let displayBalance = useAvailableBalance ? account.availableBalance : account.balance
-                Text(displayBalance.map { $0.decimalValue as Decimal }
-                    .map { $0.formatted(.currency(code: "USD")) } ?? "")
+                let unpaid = account.unpaidTransactionsOfAccount(account: account)
+                let _ = refreshToken
+                Text(adjustedBalance.map { ($0.decimalValue as Decimal).formatted(.currency(code: "USD")) } ?? "")
                     .font(.system(size: 17))
                     .fontWeight(.bold)
+
+                Circle()
+                    .fill(unpaid == 0 ? Color.green : Color.appOrange as Color)
+                    .frame(width: 8, height: 8)
+                    .padding(.leading, -5)
             }
             .contentShape(Rectangle())
         }
@@ -244,6 +168,10 @@ struct AccountRow: View {
         .background(Color.white)
         .cornerRadius(10)
         .shadow(color: .black.opacity(0.07), radius: 4, x: 0, y: 2)
+        .onReceive(NotificationCenter.default.publisher(for: .NSManagedObjectContextDidSave)) { _ in
+            refreshToken = UUID()
+        }
+        .id(refreshToken)
     }
 }
 
