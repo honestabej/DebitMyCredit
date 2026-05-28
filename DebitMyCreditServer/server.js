@@ -2280,6 +2280,44 @@ app.post("/payment-group/delete", authRequired, async (req, res, next) => {
   }
 });
 
+app.post("/payment-group/complete", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "PaymentGroup id is required"
+      });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      const updateResult = await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE TransferGroups
+          SET completed = 1, updatedAt = SYSUTCDATETIME()
+          WHERE id = @id AND userID = @userID
+        `);
+      return { rowsAffected: updateResult.rowsAffected[0] };
+    });
+
+    if (result.rowsAffected === 0) {
+      return res.status(404).json({ success: false, message: "Payment group not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Payment group marked as completed"
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 /*****************************************
  * Global Error Handling
  *****************************************/
