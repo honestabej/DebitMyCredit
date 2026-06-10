@@ -383,6 +383,17 @@ class APIModels {
         let message: String?
     }
 
+    struct CreateTransactionRequest: Codable {
+        let id: UUID
+        let accountID: UUID
+        let name: String
+        let amount: Double
+        let notes: String?
+        let transactionDate: String
+        let createdAt: String
+        let updatedAt: String
+    }
+
     struct UpdateTransactionNoteRequest: Codable {
         let transactionID: String
         let notes: String

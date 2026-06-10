@@ -1940,7 +1940,7 @@ app.get("/accounts", authRequired, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-})
+});
 
 app.post("/update/user", authRequired, async (req, res, next) => {
   try {
@@ -1988,7 +1988,7 @@ app.post("/update/user", authRequired, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-})
+});
 
 app.post("/update/accounts", authRequired, async (req, res, next) => {
   try {
@@ -2041,7 +2041,7 @@ app.post("/update/accounts", authRequired, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-})
+});
 
 // Save (replace) allocations for a transaction
 app.post("/transaction/allocations", authRequired, async (req, res, next) => {
@@ -2136,6 +2136,79 @@ app.post("/transaction/notes", authRequired, async (req, res, next) => {
 
     res.json({ success: true, message: "Note updated" });
 
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/transaction/create", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { id, accountID, name, amount, notes, transactionDate, createdAt, updatedAt } = req.body;
+
+    if (!id || !accountID || !name || amount === undefined || !transactionDate || !createdAt || !updatedAt) {
+      return res.status(400).json({ success: false, message: "id, accountID, name, amount, transactionDate, createdAt, and updatedAt are required" });
+    }
+
+    const txnDate = new Date(transactionDate);
+    if (isNaN(txnDate.getTime())) {
+      return res.status(400).json({ success: false, message: "Invalid transactionDate" });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      return pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("accountID", sql.UniqueIdentifier, accountID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("name", sql.NVarChar, name)
+        .input("amount", sql.Decimal(18, 2), amount)
+        .input("notes", sql.NVarChar, notes || "")
+        .input("transactionDate", sql.DateTimeOffset, txnDate)
+        .input("createdAt", sql.DateTimeOffset, new Date(createdAt))
+        .input("updatedAt", sql.DateTimeOffset, new Date(updatedAt))
+        .query(`
+          INSERT INTO Transactions (
+            internalID, externalID, accountInternalID, userID, amount, name, notes,
+            transactionDate, pending, createdAt, updatedAt
+          )
+          VALUES (
+            @id, @id, @accountID, @userID, @amount, @name, @notes,
+            @transactionDate, 0, @createdAt, @updatedAt
+          )
+        `);
+    });
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(500).json({ success: false, message: "Failed to insert transaction" });
+    }
+
+    res.json({ success: true, message: "Transaction created" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/transaction/delete", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { id } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "id is required" });
+    }
+
+    const result = await queryWithRetry(async (pool) => {
+      return pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`DELETE FROM Transactions WHERE internalID = @id AND userID = @userID`);
+    });
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    res.json({ success: true, message: "Transaction deleted" });
   } catch (err) {
     next(err);
   }

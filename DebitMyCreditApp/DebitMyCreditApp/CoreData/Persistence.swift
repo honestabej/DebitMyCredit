@@ -176,6 +176,9 @@ struct PersistenceController {
         let t13 = makeTx(id: "pt13", name: "Black Rock Coffee", amount: -7.26, daysAgo: 3, account: apple)
         t13.transferGroup = tg1
         let t14 = makeTx(id: "pt14", name: "Walmart", amount: -27.86, account: apple)
+        
+        let t15 = makeTx(id: "pt15", name: "Deposit", amount: 876.86, account: hysa)
+        let t16 = makeTx(id: "pt16", name: "Walmart", amount: 348.20, account: hysa)
 
         // Allocations
         func makeAllo(tx: Transaction, account: Account, amount: Double) {

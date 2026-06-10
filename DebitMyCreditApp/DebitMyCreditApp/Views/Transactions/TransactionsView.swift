@@ -11,6 +11,7 @@ struct TransactionsView: View {
     @State private var filterStartDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var filterEndDate: Date = Date()
     @State private var filterRangeOption: TransactionsView.RangeOption = .last30
+    @State private var filterUnallocated: Bool = false
 
     enum RangeOption {
         case last30, ytd, all, custom
@@ -70,7 +71,8 @@ struct TransactionsView: View {
                 accounts: Array(creditAccounts),
                 startDate: $filterStartDate,
                 endDate: $filterEndDate,
-                rangeOption: $filterRangeOption
+                rangeOption: $filterRangeOption,
+                filterUnallocated: $filterUnallocated
             )
         }
 
@@ -98,20 +100,24 @@ struct TransactionsView: View {
                     Section {
                         ForEach(Array(pendingTransactions.enumerated()), id: \.element.objectID) { index, tx in
                             TransactionRow(transaction: tx)
-                                .padding([.vertical, .leading], 8)
-                            if index < pendingTransactions.count - 1 {
-                                Divider()
-                            }
+                                .padding(.vertical, 8)
+                                .padding(.leading, 4)
+//                            if index < pendingTransactions.count - 1 {
+//                                Divider()
+//                            }
                         }
                     } header: {
-                        Text("Pending")
-                            .font(.system(size: 15))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.lightBackground)
+                        VStack(spacing: 2) {
+                            Text("Pending")
+                                .font(.system(size: 15))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.lightBackground)
+                            Divider()
+                        }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 15)
                 }
 
                 // Settled transactions grouped by day
@@ -119,20 +125,24 @@ struct TransactionsView: View {
                     Section {
                         ForEach(Array(group.transactions.enumerated()), id: \.element.objectID) { index, tx in
                             TransactionRow(transaction: tx)
-                                .padding([.vertical, .leading], 8)
-                            if index < group.transactions.count - 1 {
-                                Divider()
-                            }
+                                .padding(.vertical, 8)
+                                .padding(.leading, 4)
+//                            if index < group.transactions.count - 1 {
+//                                Divider()
+//                            }
                         }
                     } header: {
-                        Text(group.day.formatted(.dateTime.month(.wide).day().year()))
-                            .font(.system(size: 15))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.lightBackground)
+                        VStack(spacing: 2) {
+                            Text(group.day.formatted(.dateTime.month(.wide).day().year()))
+                                .font(.system(size: 15))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.lightBackground)
+                            Divider()
+                        }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 15)
                 }
             }
         }
@@ -149,6 +159,7 @@ struct TransactionsView: View {
         @Binding var startDate: Date
         @Binding var endDate: Date
         @Binding var rangeOption: TransactionsView.RangeOption
+        @Binding var filterUnallocated: Bool
         @State private var contentHeight: CGFloat = 300
 
         private var screenHeight: CGFloat {
@@ -157,7 +168,7 @@ struct TransactionsView: View {
 
         var body: some View {
             NavigationStack {
-                FilterView(selectedAccount: $selectedAccount, accounts: accounts, contentHeight: $contentHeight, startDate: $startDate, endDate: $endDate, rangeOption: $rangeOption)
+                FilterView(selectedAccount: $selectedAccount, accounts: accounts, contentHeight: $contentHeight, startDate: $startDate, endDate: $endDate, rangeOption: $rangeOption, filterUnallocated: $filterUnallocated)
             }
             .presentationDetents([.height(min(contentHeight, screenHeight * 0.7))])
             .presentationDragIndicator(.visible)
@@ -173,6 +184,7 @@ struct TransactionsView: View {
         @Binding var startDate: Date
         @Binding var endDate: Date
         @Binding var rangeOption: TransactionsView.RangeOption
+        @Binding var filterUnallocated: Bool
 
         private enum RangeOption: String, CaseIterable, Identifiable {
             case last30 = "Last 30 Days"
@@ -201,6 +213,13 @@ struct TransactionsView: View {
 
         var body: some View {
             VStack(alignment: .leading, spacing: 20) {
+                // Unallocated filter
+                Toggle(isOn: $filterUnallocated) {
+                    Text("Unallocated Only")
+                        .font(.headline)
+                }
+                .tint(Color.appOrange)
+                
                 // Date range filter
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Date Range:")
@@ -352,13 +371,17 @@ struct TransactionsView: View {
 
     // Pending transactions, shown at the top regardless of date.
     private var pendingTransactions: [Transaction] {
-        transactions.filter { $0.pending }
+        transactions.filter {
+            $0.pending && (!filterUnallocated || ($0.allocations as? Set<TransactionAllocation>)?.isEmpty == true)
+        }
     }
 
     // Non-pending transactions grouped by calendar day, newest day first.
     private var settledTransactionsByDay: [(day: Date, transactions: [Transaction])] {
         let calendar = Calendar.current
-        let settled = transactions.filter { !$0.pending }
+        let settled = transactions.filter {
+            !$0.pending && (!filterUnallocated || ($0.allocations as? Set<TransactionAllocation>)?.isEmpty == true)
+        }
         let grouped = Dictionary(grouping: settled) { tx -> Date in
             calendar.startOfDay(for: tx.transactionDate ?? .distantPast)
         }
@@ -400,37 +423,6 @@ struct TransactionRow: View {
 
         Button(action: { if (!fromPaymentGroup) { showTransactionDetail = true }}) {
             VStack(spacing: 5) {
-                // Top row containing account details and the transfer group
-                HStack() {
-                    Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 15, height: 15)
-                        .clipShape(Circle())
-                    Text(transaction.account?.name ?? "" )
-                        .font(.caption)
-                        .fontWeight(.light)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let acctNum = transaction.account?.accountNumber {
-                        Text("...\(acctNum)")
-                            .font(.caption)
-                            .fontWeight(.light)
-                    }
-                    
-                    Spacer ()
-                    
-                    if (!fromPaymentGroup) {
-                        let tgName = transaction.transferGroup?.name ?? "--"
-                        Text("Pay Group: \(tgName)")
-                            .font(.caption)
-                            .fontWeight(.light)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    
-                }
-                
                 // Middle row containg the transaction name and the amount
                 HStack(spacing: 10) {
                     Text(transaction.name ?? "")
@@ -440,6 +432,8 @@ struct TransactionRow: View {
                     
                     Spacer()
                     
+                    let isUnpaid = transaction.transferGroup == nil || transaction.transferGroup?.completed == false
+                    let effectiveAmountColor: Color = isUnpaid ? .appOrange : (transaction.pending ? .secondary : .primary)
                     let displayAmount = transaction.amount
                     Text(displayAmount.map {
                         $0.decimalValue as Decimal
@@ -448,22 +442,29 @@ struct TransactionRow: View {
                     } ?? "")
                     .fontWeight(.bold)
                     .font(.system(size: 15))
+                    .foregroundStyle(effectiveAmountColor)
                 }
                 
                 // Bottom row containing the allocations
                 HStack(spacing: 6) {
-                    Text("Allocation: ")
-                        .font(.caption)
-                        .fontWeight(.light)
+                    Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 15, height: 15)
+                        .clipShape(Circle())
+                    if let acctNum = transaction.account?.accountNumber {
+                        Text("••••\(acctNum)")
+                            .font(.caption)
+                            .fontWeight(.light)
+                    }
+                    
+                    Text("•")
                     
                     let allocations = (transaction.allocations as? Set<TransactionAllocation>)?
                         .sorted { ($0.account?.name ?? "") < ($1.account?.name ?? "") } ?? []
                     
                     if allocations.isEmpty {
-                        Text("None")
-                            .font(.caption2)
-                            .fontWeight(.light)
-                            .foregroundColor(.secondary)
+                        UnallocatedChip()
                     } else {
                         ForEach(allocations, id: \.objectID) { allocation in
                             if let account = allocation.account {
@@ -541,6 +542,24 @@ private struct AllocationChip: View {
             .padding(.vertical, 3)
             .background(Color(hex: account.accountColor ?? "#BDBDBD").opacity(0.41))
             .clipShape(Capsule())
+    }
+}
+
+private struct UnallocatedChip: View {
+
+    var body: some View {
+        Text("Unallocated")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .lineLimit(1)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .overlay(
+                Capsule()
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3]))
+                    .foregroundColor(.secondary)
+            )
     }
 }
 
