@@ -321,7 +321,7 @@ class APIService {
     }
 
     // Create a manual transaction
-    func createTransaction(id: UUID, accountID: UUID, name: String, amount: Double, notes: String?, transactionDate: Date, token: String) async throws -> APIModels.GenericResponse {
+    func createTransaction(id: UUID, accountID: UUID, name: String, amount: Double, notes: String?, transactionDate: Date, accountUpdatedAt: Date, token: String) async throws -> APIModels.GenericResponse {
         let isoFormatter = ISO8601DateFormatter()
         let nowString = isoFormatter.string(from: Date())
         let body = APIModels.CreateTransactionRequest(
@@ -332,7 +332,8 @@ class APIService {
             notes: notes?.isEmpty == false ? notes : nil,
             transactionDate: isoFormatter.string(from: transactionDate),
             createdAt: nowString,
-            updatedAt: nowString
+            updatedAt: nowString,
+            accountUpdatedAt: isoFormatter.string(from: accountUpdatedAt)
         )
         return try await makeRequest(endpoint: "/transaction/create", method: .post, body: body, token: token)
     }
@@ -350,9 +351,10 @@ class APIService {
     }
 
     // Delete a manual transaction
-    func deleteTransaction(id: UUID, token: String) async throws -> APIModels.GenericResponse {
-        struct Body: Encodable { let id: UUID }
-        return try await makeRequest(endpoint: "/transaction/delete", method: .post, body: Body(id: id), token: token)
+    func deleteTransaction(id: UUID, accountUpdatedAt: Date, token: String) async throws -> APIModels.GenericResponse {
+        let isoFormatter = ISO8601DateFormatter()
+        struct Body: Encodable { let id: UUID; let accountUpdatedAt: String }
+        return try await makeRequest(endpoint: "/transaction/delete", method: .post, body: Body(id: id, accountUpdatedAt: isoFormatter.string(from: accountUpdatedAt)), token: token)
     }
 
     // Update the transfer group for a transaction (pass nil transferGroupID to clear it)

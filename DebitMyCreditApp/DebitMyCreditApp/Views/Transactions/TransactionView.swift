@@ -53,12 +53,16 @@ struct TransactionView: View {
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .strikethrough(transaction.isOrphaned)
                 }
                 .padding(.horizontal, 5)
                 .padding(.top, 25)
                 
                 // Transaction amount
                 let displayAmount = transaction.amount
+                let isUnpaid = transaction.account?.accountType == "Credit"
+                    && (transaction.amount?.decimalValue ?? 0) < 0
+                    && (transaction.transferGroup == nil || transaction.transferGroup?.completed == false)
                 Text(displayAmount.map {
                     $0.decimalValue as Decimal
                 } .map {
@@ -67,6 +71,8 @@ struct TransactionView: View {
                 .fontWeight(.bold)
                 .font(.system(size: 45))
                 .scaleEffect(x: 1.0, y: 1.05, anchor: .center)
+                .foregroundStyle(isUnpaid ? Color.appOrange.opacity(0.8) : .primary)
+                .strikethrough(transaction.isOrphaned)
                 //                .padding(.top, 5)
                 
                 // Transaction date
@@ -102,77 +108,51 @@ struct TransactionView: View {
                     let screenMidY: CGFloat = UIApplication.shared.connectedScenes
                         .compactMap { $0 as? UIWindowScene }.first?.screen.bounds.midY ?? 400
 
-                    HStack {
-                        Text("Payment Group: ")
-
-                        Button {
-                            showGroupPicker = true
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(selectedGroup?.name ?? "None")
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 12))
+                    if !transaction.isOrphaned {
+                        HStack {
+                            Text("Payment Group: ")
+                            
+                            Button {
+                                showGroupPicker = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(selectedGroup?.name ?? "None")
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 12))
+                                }
                             }
-                        }
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
-                        .onGeometryChange(for: CGFloat.self) {
-                            $0.frame(in: .global).midY
-                        } action: {
-                            groupButtonGlobalY = $0
-                        }
-                        .popover(isPresented: $showGroupPicker, arrowEdge: groupButtonGlobalY > screenMidY ? .bottom : .top) {
-                            let groups: [TransferGroup] = {
-                                guard let userID = authManager.currentUser?.id else { return [] }
-                                return CoreDataService.shared.fetchTransferGroups(forUserID: userID, in: viewContext)
-                            }()
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    // "None" option to deselect
-                                    Button {
-                                        if selectedGroup != nil {
-                                            selectedGroup = nil
-                                            hasGroupChange = true
-                                        }
-                                        showGroupPicker = false
-                                    } label: {
-                                        HStack {
-                                            Text("None")
-                                                .foregroundStyle(selectedGroup == nil ? Color.appOrange : .primary)
-                                                .fontWeight(selectedGroup == nil ? .semibold : .regular)
-                                            Spacer()
-                                            if selectedGroup == nil {
-                                                Image(systemName: "checkmark")
-                                                    .foregroundStyle(Color.appOrange)
-                                            }
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 12)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    ForEach(groups) { group in
-                                        Divider()
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                            .onGeometryChange(for: CGFloat.self) {
+                                $0.frame(in: .global).midY
+                            } action: {
+                                groupButtonGlobalY = $0
+                            }
+                            .popover(isPresented: $showGroupPicker, arrowEdge: groupButtonGlobalY > screenMidY ? .bottom : .top) {
+                                let groups: [TransferGroup] = {
+                                    guard let userID = authManager.currentUser?.id else { return [] }
+                                    return CoreDataService.shared.fetchTransferGroups(forUserID: userID, in: viewContext)
+                                }()
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        // "None" option to deselect
                                         Button {
-                                            if selectedGroup?.id == group.id {
+                                            if selectedGroup != nil {
                                                 selectedGroup = nil
-                                            } else {
-                                                selectedGroup = group
+                                                hasGroupChange = true
                                             }
-                                            hasGroupChange = true
                                             showGroupPicker = false
                                         } label: {
                                             HStack {
-                                                Text(group.name ?? "")
-                                                    .foregroundStyle(selectedGroup?.id == group.id ? Color.appOrange : .primary)
-                                                    .fontWeight(selectedGroup?.id == group.id ? .semibold : .regular)
+                                                Text("None")
+                                                    .foregroundStyle(selectedGroup == nil ? Color.appOrange : .primary)
+                                                    .fontWeight(selectedGroup == nil ? .semibold : .regular)
                                                 Spacer()
-                                                if selectedGroup?.id == group.id {
+                                                if selectedGroup == nil {
                                                     Image(systemName: "checkmark")
                                                         .foregroundStyle(Color.appOrange)
                                                 }
@@ -182,24 +162,65 @@ struct TransactionView: View {
                                             .contentShape(Rectangle())
                                         }
                                         .buttonStyle(.plain)
+                                        
+                                        ForEach(groups) { group in
+                                            Divider()
+                                            Button {
+                                                if selectedGroup?.id == group.id {
+                                                    selectedGroup = nil
+                                                } else {
+                                                    selectedGroup = group
+                                                }
+                                                hasGroupChange = true
+                                                showGroupPicker = false
+                                            } label: {
+                                                HStack {
+                                                    Text(group.name ?? "")
+                                                        .foregroundStyle(selectedGroup?.id == group.id ? Color.appOrange : .primary)
+                                                        .fontWeight(selectedGroup?.id == group.id ? .semibold : .regular)
+                                                    Spacer()
+                                                    if selectedGroup?.id == group.id {
+                                                        Image(systemName: "checkmark")
+                                                            .foregroundStyle(Color.appOrange)
+                                                    }
+                                                }
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 12)
+                                                .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
                                     }
                                 }
+                                .frame(minWidth: 200)
+                                .presentationCompactAdaptation(.popover)
                             }
-                            .frame(minWidth: 200)
-                            .presentationCompactAdaptation(.popover)
                         }
-                    }
-                    .padding(.top, 7)
-                    .padding(.horizontal, 15)
+                        .padding(.top, 7)
+                        .padding(.horizontal, 15)
+                        
 
-                    if selectedGroup == nil || selectedGroup?.completed == false {
-                        Text("Unpaid")
-                            .foregroundStyle(Color.appOrange)
-                            .padding(.top, 7)
+                    } else {
+                        VStack(alignment: .center, spacing: 5) {
+                            HStack(spacing: 2) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.orange)
+                                Text("Transaction No Longer Exists")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                            }
+                            Text("This was likely replaced after posting and can be safely deleted.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 30)
+                            
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
                     }
 
                     AllocationSectionView(transaction: transaction)
-                        .padding(.top, 15)
                 }
             }
         }

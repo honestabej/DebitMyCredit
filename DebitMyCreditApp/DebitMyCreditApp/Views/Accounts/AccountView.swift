@@ -66,7 +66,7 @@ struct AccountView: View {
 //                        .init(color: bankColor.opacity(0.85), location: 0),
 //                        .init(color: bankColor.opacity(0), location: 0.35)
                         .init(color: bankColor.opacity(0.75), location: 0),
-                        .init(color: bankColor.opacity(0), location: 0.20)
+                        .init(color: bankColor.opacity(0), location: 0.18)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -165,16 +165,18 @@ struct AccountView: View {
                 }
                 .padding(.top, 1)
                 
-                Text("Last update received at \(acctBalDate)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .padding(.top, 2)
+                if account.accountSource != "Manual" {
+                    Text("Last update received at \(acctBalDate)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                }
                 
                 Text("Transactions: ")
                     .padding(.leading, 10)
                     .padding(.top, 3)
-                    .padding(.bottom, -10)
+                    .padding(.bottom, -7)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .font(.system(size: 20))
                     .fontWeight(.semibold)
@@ -211,7 +213,7 @@ struct AccountView: View {
                             NavigationStack {
                                 newTransactionView
                             }
-                            .presentationDetents([.height(290)])
+                            .presentationDetents([.height(325)])
                             .presentationDragIndicator(.visible)
                         }
                         
@@ -261,7 +263,7 @@ struct AccountView: View {
                         Divider()
                     }
                     .listRowInsets(EdgeInsets())
-                    .background(Color.lightBackground)
+//                    .background(Color.lightBackground)
                     .padding(.horizontal, 15)
                 }
             }
@@ -297,7 +299,7 @@ struct AccountView: View {
                         Divider()
                     }
                     .listRowInsets(EdgeInsets())
-                    .background(Color.lightBackground)
+//                    .background(Color.lightBackground)
                     .padding(.horizontal, 15)
                 }
             }
@@ -319,16 +321,24 @@ struct AccountView: View {
 
         // Snapshot for revert
         let snapshot = transaction
+        let txnAmount = transaction.amount ?? NSDecimalNumber.zero
+        let previousAccountUpdatedAt = account.updatedAt
+        let accountUpdatedAt = Date()
+
+        // Update balance optimistically (reverse the transaction's effect)
+        account.balance = account.balance?.subtracting(txnAmount) ?? NSDecimalNumber.zero
+        account.availableBalance = account.availableBalance?.subtracting(txnAmount) ?? NSDecimalNumber.zero
+        account.updatedAt = accountUpdatedAt
 
         viewContext.delete(transaction)
         try? viewContext.save()
 
         Task {
             do {
-                _ = try await APIService.shared.deleteTransaction(id: txnID, token: token)
+                _ = try await APIService.shared.deleteTransaction(id: txnID, accountUpdatedAt: accountUpdatedAt, token: token)
             } catch {
                 await MainActor.run {
-                    // Revert: re-insert the transaction
+                    // Revert: re-insert the transaction and restore balance
                     let restored = Transaction(context: viewContext)
                     restored.id = snapshot.id
                     restored.externalID = snapshot.externalID
@@ -341,6 +351,9 @@ struct AccountView: View {
                     restored.updatedAt = snapshot.updatedAt
                     restored.account = account
                     restored.user = snapshot.user
+                    account.balance = account.balance?.adding(txnAmount) ?? txnAmount
+                    account.availableBalance = account.availableBalance?.adding(txnAmount) ?? txnAmount
+                    account.updatedAt = previousAccountUpdatedAt
                     try? viewContext.save()
                 }
             }
@@ -363,6 +376,7 @@ private struct NewTransactionView: View {
     @State private var transactionAmount: String = ""
     @State private var transactionDate: Date = Date()
     @State private var transactionNote: String = ""
+    @State private var isDeposit: Bool = false
     @State private var isCompleting: Bool = false
     @State private var errorMessage: String?
     @State private var showErrorAlert = false
@@ -382,6 +396,12 @@ private struct NewTransactionView: View {
                 .padding(.vertical, 8)
                 .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
 
+            Picker("", selection: $isDeposit) {
+                Text("Withdrawal").tag(false)
+                Text("Deposit").tag(true)
+            }
+            .pickerStyle(.segmented)
+
             HStack(alignment: .center) {
                 Text("$")
                     .font(.system(size: 20))
@@ -395,10 +415,23 @@ private struct NewTransactionView: View {
                     .padding(.vertical, 8)
                     .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
                     .frame(width: 150)
-                    .keyboardType(.numberPad)
+                    .keyboardType(.decimalPad)
                     .onChange(of: transactionAmount) { _, newValue in
-                        let digits = newValue.filter { $0.isNumber }
-                        transactionAmount = String(digits.prefix(4))
+                        // Allow digits and at most one decimal point
+                        var dotSeen = false
+                        let filtered = newValue.filter { char in
+                            if char.isNumber { return true }
+                            if char == "." && !dotSeen { dotSeen = true; return true }
+                            return false
+                        }
+                        // Limit to 7 digits before decimal, 2 after
+                        if let dotIndex = filtered.firstIndex(of: ".") {
+                            let intPart = String(filtered[filtered.startIndex..<dotIndex].prefix(7))
+                            let fracPart = String(filtered[filtered.index(after: dotIndex)...].prefix(2))
+                            transactionAmount = intPart + "." + fracPart
+                        } else {
+                            transactionAmount = String(filtered.prefix(7))
+                        }
                     }
 
                 Spacer()
@@ -489,6 +522,8 @@ private struct NewTransactionView: View {
         isCompleting = true
         let newID = UUID()
         let now = Date()
+        let signedAmount = isDeposit ? amount : -amount
+        let balanceDelta = NSDecimalNumber(value: signedAmount)
 
         // Save to CoreData first
         let userFetch = User.fetchRequest()
@@ -504,7 +539,7 @@ private struct NewTransactionView: View {
         newTxn.id = newID
         newTxn.externalID = newID.uuidString
         newTxn.name = trimmedName
-        newTxn.amount = NSDecimalNumber(value: -amount)
+        newTxn.amount = NSDecimalNumber(value: signedAmount)
         newTxn.notes = transactionNote.trimmingCharacters(in: .whitespacesAndNewlines)
         newTxn.transactionDate = transactionDate
         newTxn.pending = false
@@ -513,9 +548,18 @@ private struct NewTransactionView: View {
         newTxn.account = account
         newTxn.user = userEntity
 
+        // Update account balance optimistically
+        let previousAccountUpdatedAt = account.updatedAt
+        account.balance = account.balance?.adding(balanceDelta) ?? balanceDelta
+        account.availableBalance = account.availableBalance?.adding(balanceDelta) ?? balanceDelta
+        account.updatedAt = now
+
         do {
             try viewContext.save()
         } catch {
+            account.balance = account.balance?.subtracting(balanceDelta) ?? NSDecimalNumber.zero
+            account.availableBalance = account.availableBalance?.subtracting(balanceDelta) ?? NSDecimalNumber.zero
+            account.updatedAt = previousAccountUpdatedAt
             viewContext.rollback()
             isCompleting = false
             errorMessage = "Failed to save locally: \(error.localizedDescription)"
@@ -529,9 +573,10 @@ private struct NewTransactionView: View {
                     id: newID,
                     accountID: accountID,
                     name: trimmedName,
-                    amount: -amount,
+                    amount: signedAmount,
                     notes: transactionNote.trimmingCharacters(in: .whitespacesAndNewlines),
                     transactionDate: transactionDate,
+                    accountUpdatedAt: now,
                     token: token
                 )
                 await MainActor.run {
@@ -541,6 +586,9 @@ private struct NewTransactionView: View {
             } catch {
                 await MainActor.run {
                     viewContext.delete(newTxn)
+                    account.balance = account.balance?.subtracting(balanceDelta) ?? NSDecimalNumber.zero
+                    account.availableBalance = account.availableBalance?.subtracting(balanceDelta) ?? NSDecimalNumber.zero
+                    account.updatedAt = previousAccountUpdatedAt
                     try? viewContext.save()
                     isCompleting = false
                     errorMessage = "Failed to save to server: \(error.localizedDescription)"

@@ -422,92 +422,89 @@ struct TransactionRow: View {
     var body: some View {
 
         Button(action: { if (!fromPaymentGroup) { showTransactionDetail = true }}) {
-            VStack(spacing: 5) {
-                // Middle row containg the transaction name and the amount
-                HStack(spacing: 10) {
-                    Text(transaction.name ?? "")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    
-                    Spacer()
-                    
-                    let isUnpaid = transaction.transferGroup == nil || transaction.transferGroup?.completed == false
-                    let effectiveAmountColor: Color = isUnpaid ? .appOrange : (transaction.pending ? .secondary : .primary)
-                    let displayAmount = transaction.amount
-                    Text(displayAmount.map {
-                        $0.decimalValue as Decimal
-                    } .map {
-                        $0.formatted(.currency(code: "USD"))
-                    } ?? "")
-                    .fontWeight(.bold)
-                    .font(.system(size: 15))
-                    .foregroundStyle(effectiveAmountColor)
-                }
-                
-                // Bottom row containing the allocations
-                HStack(spacing: 6) {
-                    Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 15, height: 15)
-                        .clipShape(Circle())
-                    if let acctNum = transaction.account?.accountNumber {
-                        Text("••••\(acctNum)")
-                            .font(.caption)
-                            .fontWeight(.light)
+            HStack{
+                VStack(spacing: 5) {
+                    // Middle row containg the transaction name and the amount
+                    HStack(spacing: 10) {
+                        if transaction.isOrphaned {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        
+                        Text(transaction.name ?? "")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .strikethrough(transaction.isOrphaned)
+                        
+                        
+                        Spacer()
+                        
+                        let isUnpaid = transaction.transferGroup == nil || transaction.transferGroup?.completed == false
+                        let effectiveAmountColor: Color = isUnpaid ? .appOrange : (transaction.pending ? .secondary : .primary)
+                        let displayAmount = transaction.amount
+                        Text(displayAmount.map {
+                            $0.decimalValue as Decimal
+                        } .map {
+                            $0.formatted(.currency(code: "USD"))
+                        } ?? "")
+                        .fontWeight(.bold)
+                        .font(.system(size: 15))
+                        .foregroundStyle(effectiveAmountColor)
+                        .strikethrough(transaction.isOrphaned)
                     }
                     
-                    Text("•")
-                    
-                    let allocations = (transaction.allocations as? Set<TransactionAllocation>)?
-                        .sorted { ($0.account?.name ?? "") < ($1.account?.name ?? "") } ?? []
-                    
-                    if allocations.isEmpty {
-                        UnallocatedChip()
-                    } else {
-                        ForEach(allocations, id: \.objectID) { allocation in
-                            if let account = allocation.account {
-                                AllocationChip(account: account)
+                    // Bottom row containing the allocations
+                    HStack(spacing: 6) {
+                        Image(getBankCircleLogo(bankName: transaction.account?.bank?.lowercased() ?? ""))
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 15, height: 15)
+                            .clipShape(Circle())
+                        if let acctNum = transaction.account?.accountNumber {
+                            Text("••••\(acctNum)")
+                                .font(.caption)
+                                .fontWeight(.light)
+                        }
+                        
+                        Text("•")
+                        
+                        let allocations = (transaction.allocations as? Set<TransactionAllocation>)?
+                            .sorted { ($0.account?.name ?? "") < ($1.account?.name ?? "") } ?? []
+                        
+                        if allocations.isEmpty {
+                            UnallocatedChip()
+                        } else {
+                            ForEach(allocations, id: \.objectID) { allocation in
+                                if let account = allocation.account {
+                                    AllocationChip(account: account)
+                                }
                             }
                         }
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 5)
-                
-                // Delete orphaned pending transaction
-                if transaction.isOrphaned {
-                    HStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Transaction no longer exists")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.black)
-                        }
                         Spacer()
-                        Button(role: .destructive) {
-                            viewContext.delete(transaction)
-                            try? viewContext.save()
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.red.opacity(0.9))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 5)
+                }
+                .foregroundColor(transaction.pending ? .secondary : .primary)
+                .contentShape(Rectangle())
+                
+                if transaction.isOrphaned {
+                    Button(role: .destructive) {
+                        viewContext.delete(transaction)
+                        try? viewContext.save()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.8))
+                            .clipShape(Circle())
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .foregroundColor(transaction.pending ? .secondary : .primary)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showTransactionDetail) {

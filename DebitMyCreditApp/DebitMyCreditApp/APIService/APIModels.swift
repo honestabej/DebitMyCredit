@@ -392,6 +392,7 @@ class APIModels {
         let transactionDate: String
         let createdAt: String
         let updatedAt: String
+        let accountUpdatedAt: String
     }
 
     struct UpdateTransactionNoteRequest: Codable {
