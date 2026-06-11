@@ -2144,10 +2144,10 @@ app.post("/transaction/notes", authRequired, async (req, res, next) => {
 app.post("/transaction/create", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
-    const { id, accountID, name, amount, notes, transactionDate, createdAt, updatedAt } = req.body;
+    const { id, accountID, name, amount, notes, transactionDate, createdAt, updatedAt, accountUpdatedAt } = req.body;
 
-    if (!id || !accountID || !name || amount === undefined || !transactionDate || !createdAt || !updatedAt) {
-      return res.status(400).json({ success: false, message: "id, accountID, name, amount, transactionDate, createdAt, and updatedAt are required" });
+    if (!id || !accountID || !name || amount === undefined || !transactionDate || !createdAt || !updatedAt || !accountUpdatedAt) {
+      return res.status(400).json({ success: false, message: "id, accountID, name, amount, transactionDate, createdAt, updatedAt, and accountUpdatedAt are required" });
     }
 
     const txnDate = new Date(transactionDate);
@@ -2181,11 +2181,12 @@ app.post("/transaction/create", authRequired, async (req, res, next) => {
       await pool.request()
         .input("accountID", sql.UniqueIdentifier, accountID)
         .input("amount", sql.Decimal(18, 2), amount)
+        .input("accountUpdatedAt", sql.DateTimeOffset, new Date(accountUpdatedAt))
         .query(`
           UPDATE Accounts
           SET balance = balance + @amount,
               availableBalance = availableBalance + @amount,
-              updatedAt = SYSUTCDATETIME()
+              updatedAt = @accountUpdatedAt
           WHERE internalID = @accountID AND accountSource = 'Manual'
         `);
 
@@ -2205,10 +2206,10 @@ app.post("/transaction/create", authRequired, async (req, res, next) => {
 app.post("/transaction/delete", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
-    const { id } = req.body;
+    const { id, accountUpdatedAt } = req.body;
 
-    if (!id) {
-      return res.status(400).json({ success: false, message: "id is required" });
+    if (!id || !accountUpdatedAt) {
+      return res.status(400).json({ success: false, message: "id and accountUpdatedAt are required" });
     }
 
     const result = await queryWithRetry(async (pool) => {
@@ -2231,11 +2232,12 @@ app.post("/transaction/delete", authRequired, async (req, res, next) => {
       await pool.request()
         .input("accountID", sql.UniqueIdentifier, accountInternalID)
         .input("amount", sql.Decimal(18, 2), amount)
+        .input("accountUpdatedAt", sql.DateTimeOffset, new Date(accountUpdatedAt))
         .query(`
           UPDATE Accounts
           SET balance = balance - @amount,
               availableBalance = availableBalance - @amount,
-              updatedAt = SYSUTCDATETIME()
+              updatedAt = @accountUpdatedAt
           WHERE internalID = @accountID AND accountSource = 'Manual'
         `);
 
