@@ -2156,7 +2156,7 @@ app.post("/transaction/create", authRequired, async (req, res, next) => {
     }
 
     const result = await queryWithRetry(async (pool) => {
-      return pool.request()
+      const insertResult = await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("accountID", sql.UniqueIdentifier, accountID)
         .input("userID", sql.UniqueIdentifier, userID)
@@ -2176,6 +2176,20 @@ app.post("/transaction/create", authRequired, async (req, res, next) => {
             @transactionDate, 0, @createdAt, @updatedAt
           )
         `);
+
+      // Update manual account balance
+      await pool.request()
+        .input("accountID", sql.UniqueIdentifier, accountID)
+        .input("amount", sql.Decimal(18, 2), amount)
+        .query(`
+          UPDATE Accounts
+          SET balance = balance + @amount,
+              availableBalance = availableBalance + @amount,
+              updatedAt = SYSUTCDATETIME()
+          WHERE internalID = @accountID AND accountSource = 'Manual'
+        `);
+
+      return insertResult;
     });
 
     if (result.rowsAffected[0] === 0) {
@@ -2198,10 +2212,34 @@ app.post("/transaction/delete", authRequired, async (req, res, next) => {
     }
 
     const result = await queryWithRetry(async (pool) => {
-      return pool.request()
+      // Fetch the transaction first so we can reverse its balance effect
+      const txnResult = await pool.request()
+        .input("id", sql.UniqueIdentifier, id)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT accountInternalID, amount FROM Transactions WHERE internalID = @id AND userID = @userID`);
+
+      if (txnResult.recordset.length === 0) return { rowsAffected: 0 };
+
+      const { accountInternalID, amount } = txnResult.recordset[0];
+
+      const deleteResult = await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`DELETE FROM Transactions WHERE internalID = @id AND userID = @userID`);
+
+      // Reverse the transaction's effect on the manual account balance
+      await pool.request()
+        .input("accountID", sql.UniqueIdentifier, accountInternalID)
+        .input("amount", sql.Decimal(18, 2), amount)
+        .query(`
+          UPDATE Accounts
+          SET balance = balance - @amount,
+              availableBalance = availableBalance - @amount,
+              updatedAt = SYSUTCDATETIME()
+          WHERE internalID = @accountID AND accountSource = 'Manual'
+        `);
+
+      return deleteResult;
     });
 
     if (result.rowsAffected[0] === 0) {
