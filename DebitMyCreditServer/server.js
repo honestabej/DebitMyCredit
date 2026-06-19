@@ -1843,10 +1843,28 @@ app.get("/user/data", authRequired, async (req, res, next) => {
       const paymentsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT id, name, completed, createdAt, updatedAt
+          SELECT id, name, completed, paymentType, creditCardAccountID, createdAt, updatedAt
           FROM Payments
           WHERE userID = @userID
           ORDER BY createdAt ASC
+        `);
+
+      // Fetch payment accounts
+      const paymentAccountsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT
+            pa.id,
+            pa.paymentID,
+            pa.accountInternalID,
+            pa.paymentAmount,
+            pa.isComplete,
+            pa.matchedTransactionID,
+            pa.createdAt,
+            pa.updatedAt
+          FROM PaymentAccounts pa
+          INNER JOIN Payments p ON pa.paymentID = p.id
+          WHERE p.userID = @userID
         `);
 
       // Fetch all allocations for this user's transactions
@@ -1890,6 +1908,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
         accounts: accountsResult.recordset || [],
         transactions: transactionsResult.recordset || [],
         payments: paymentsResult.recordset || [],
+        paymentAccounts: paymentAccountsResult.recordset || [],
         allocations: allocationsResult.recordset || []
       };
     });
@@ -2276,63 +2295,70 @@ app.post("/transaction/payment", authRequired, async (req, res, next) => {
 
 app.post("/payment/create", authRequired, async (req, res, next) => {
   try {
-    const { id, userID, name, transactionIDs, completed, createdAt, updatedAt } = req.body;
+    const { id, userID, name, paymentType, creditCardAccountID, transactionIDs, paymentAccounts, createdAt, updatedAt } = req.body;
 
-    if (!id || !userID || !name || !createdAt || !updatedAt) {
+    if (!id || !userID || !name || !paymentType || !creditCardAccountID || !createdAt || !updatedAt) {
       return res.status(400).json({
         success: false,
-        message: "id, userID, name, createdAt, and updatedAt are all required"
+        message: "id, userID, name, paymentType, creditCardAccountID, createdAt, and updatedAt are all required"
+      });
+    }
+
+    if (!Array.isArray(paymentAccounts) || paymentAccounts.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "paymentAccounts array is required and must not be empty"
       });
     }
 
     await queryWithRetry(async (pool) => {
-      // Create the new Payment row
+      // Create the Payment row
       await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
         .input("name", sql.NVarChar(255), name)
-        .input("completed", sql.Bit, completed ? 1 : 0)
+        .input("paymentType", sql.NVarChar(20), paymentType)
+        .input("creditCardAccountID", sql.UniqueIdentifier, creditCardAccountID)
         .input("createdAt", sql.DateTimeOffset, createdAt)
         .input("updatedAt", sql.DateTimeOffset, updatedAt)
         .query(`
           INSERT INTO Payments (
-            id, userID, name, completed, createdAt, updatedAt
+            id, userID, name, paymentType, creditCardAccountID, createdAt, updatedAt
           )
           VALUES (
-            @id, @userID, @name, @completed, @createdAt, @updatedAt
+            @id, @userID, @name, @paymentType, @creditCardAccountID, @createdAt, @updatedAt
           )
         `);
 
-      // Update the paymentID of each transaction in the payment
-      const txnIDs = Array.isArray(transactionIDs) ? transactionIDs : [];
-      for (const transactionID of txnIDs) {
+      // Insert one PaymentAccount row per debit account
+      // Each paymentAccount: { id, accountInternalID, paymentAmount }
+      for (const pa of paymentAccounts) {
         await pool.request()
-          .input("id", sql.UniqueIdentifier, id)
-          .input("transactionID", sql.UniqueIdentifier, transactionID)
+          .input("paID", sql.UniqueIdentifier, pa.id)
+          .input("paymentID", sql.UniqueIdentifier, id)
+          .input("accountInternalID", sql.UniqueIdentifier, pa.accountInternalID)
+          .input("paymentAmount", sql.Decimal(18, 2), pa.paymentAmount)
           .query(`
-            UPDATE Transactions
-              SET paymentID = @id,
-                  updatedAt = SYSUTCDATETIME()
-              WHERE internalID = @transactionID
+            INSERT INTO PaymentAccounts (id, paymentID, accountInternalID, paymentAmount)
+            VALUES (@paID, @paymentID, @accountInternalID, @paymentAmount)
           `);
       }
 
-      // Return the newly created payment
-      const result = await pool.request()
-        .input("id", sql.UniqueIdentifier, id)
-        .query(`
-          SELECT id, name, completed, createdAt, updatedAt
-          FROM Payments
-          WHERE id = @id
-        `);
-
-      return result.recordset[0];
+      // Link each transaction to this payment
+      const txnIDs = Array.isArray(transactionIDs) ? transactionIDs : [];
+      for (const transactionID of txnIDs) {
+        await pool.request()
+          .input("paymentID", sql.UniqueIdentifier, id)
+          .input("transactionID", sql.UniqueIdentifier, transactionID)
+          .query(`
+            UPDATE Transactions
+            SET paymentID = @paymentID, updatedAt = SYSUTCDATETIME()
+            WHERE internalID = @transactionID
+          `);
+      }
     });
 
-    res.json({
-      success: true,
-      message: "Payment created"
-    });
+    res.json({ success: true, message: "Payment created" });
 
   } catch (err) {
     next(err);
@@ -2364,7 +2390,7 @@ app.post("/payment/delete", authRequired, async (req, res, next) => {
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
           DELETE FROM Payments
-          WHERE id = @id AND userID = @userID AND name != 'Manual'
+          WHERE id = @id AND userID = @userID
         `);
 
       return { rowsAffected: deleteResult.rowsAffected[0] };
@@ -2381,40 +2407,117 @@ app.post("/payment/delete", authRequired, async (req, res, next) => {
   }
 });
 
-app.post("/payment/complete", authRequired, async (req, res, next) => {
+// Manually mark a single PaymentAccount as complete.
+// Also flips Payment.completed = 1 if all PaymentAccounts for that payment are now complete.
+app.post("/payment/account/complete", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
-    const { id } = req.body;
+    const { paymentAccountID } = req.body;
 
-    if (!id) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment id is required"
-      });
+    if (!paymentAccountID) {
+      return res.status(400).json({ success: false, message: "paymentAccountID is required" });
     }
 
-    const result = await queryWithRetry(async (pool) => {
+    await queryWithRetry(async (pool) => {
+      // Mark the PaymentAccount complete
       const updateResult = await pool.request()
-        .input("id", sql.UniqueIdentifier, id)
+        .input("paymentAccountID", sql.UniqueIdentifier, paymentAccountID)
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          UPDATE Payments
-          SET completed = 1, updatedAt = SYSUTCDATETIME()
-          WHERE id = @id AND userID = @userID
+          UPDATE pa
+          SET pa.isComplete = 1, pa.updatedAt = SYSUTCDATETIME()
+          FROM PaymentAccounts pa
+          INNER JOIN Payments p ON pa.paymentID = p.id
+          WHERE pa.id = @paymentAccountID AND p.userID = @userID
         `);
-      return { rowsAffected: updateResult.rowsAffected[0] };
+
+      if (updateResult.rowsAffected[0] === 0) {
+        throw Object.assign(new Error("PaymentAccount not found"), { statusCode: 404 });
+      }
+
+      // Flip Payment.completed if all its PaymentAccounts are now complete
+      await pool.request()
+        .input("paymentAccountID", sql.UniqueIdentifier, paymentAccountID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE p
+          SET p.completed = 1, p.updatedAt = SYSUTCDATETIME()
+          FROM Payments p
+          INNER JOIN PaymentAccounts pa ON pa.paymentID = p.id
+          WHERE pa.id = @paymentAccountID
+            AND p.userID = @userID
+            AND NOT EXISTS (
+              SELECT 1 FROM PaymentAccounts pa2
+              WHERE pa2.paymentID = p.id AND pa2.isComplete = 0
+            )
+        `);
     });
 
-    if (result.rowsAffected === 0) {
-      return res.status(404).json({ success: false, message: "Payment not found" });
-    }
-
-    res.json({
-      success: true,
-      message: "Payment marked as completed"
-    });
+    res.json({ success: true, message: "Payment account marked complete" });
 
   } catch (err) {
+    if (err.statusCode === 404) {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    next(err);
+  }
+});
+
+// Link a cleared transaction to a PaymentAccount and mark it complete.
+// Also flips Payment.completed = 1 if all PaymentAccounts for that payment are now complete.
+app.post("/payment/account/match", authRequired, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+    const { paymentAccountID, transactionID } = req.body;
+
+    if (!paymentAccountID || !transactionID) {
+      return res.status(400).json({ success: false, message: "paymentAccountID and transactionID are required" });
+    }
+
+    await queryWithRetry(async (pool) => {
+      // Link the transaction and mark complete
+      const updateResult = await pool.request()
+        .input("paymentAccountID", sql.UniqueIdentifier, paymentAccountID)
+        .input("transactionID", sql.UniqueIdentifier, transactionID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE pa
+          SET pa.matchedTransactionID = @transactionID,
+              pa.isComplete = 1,
+              pa.updatedAt = SYSUTCDATETIME()
+          FROM PaymentAccounts pa
+          INNER JOIN Payments p ON pa.paymentID = p.id
+          WHERE pa.id = @paymentAccountID AND p.userID = @userID
+        `);
+
+      if (updateResult.rowsAffected[0] === 0) {
+        throw Object.assign(new Error("PaymentAccount not found"), { statusCode: 404 });
+      }
+
+      // Flip Payment.completed if all its PaymentAccounts are now complete
+      await pool.request()
+        .input("paymentAccountID", sql.UniqueIdentifier, paymentAccountID)
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          UPDATE p
+          SET p.completed = 1, p.updatedAt = SYSUTCDATETIME()
+          FROM Payments p
+          INNER JOIN PaymentAccounts pa ON pa.paymentID = p.id
+          WHERE pa.id = @paymentAccountID
+            AND p.userID = @userID
+            AND NOT EXISTS (
+              SELECT 1 FROM PaymentAccounts pa2
+              WHERE pa2.paymentID = p.id AND pa2.isComplete = 0
+            )
+        `);
+    });
+
+    res.json({ success: true, message: "Payment account matched and marked complete" });
+
+  } catch (err) {
+    if (err.statusCode === 404) {
+      return res.status(404).json({ success: false, message: err.message });
+    }
     next(err);
   }
 });
