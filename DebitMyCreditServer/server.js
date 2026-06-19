@@ -1014,7 +1014,6 @@ app.post("/register", async (req, res, next) => {
     // Hash password and generate userID BEFORE the database call
     const hashed = await hashPassword(password);
     const id = uuidv4();
-    const tgid = uuidv4();
 
     // Wrap ALL database operations in the retry wrapper
     const result = await queryWithRetry(async (pool) => {
@@ -1037,17 +1036,6 @@ app.post("/register", async (req, res, next) => {
             id, email, passwordHash
           )
           VALUES (@id, @email, @passwordHash)
-        `);
-
-      // Create a "Manual" payment by default for all users
-      await pool.request()
-        .input("tgid", sql.VarChar(50), tgid)
-        .input("userID", sql.VarChar(50), id)
-        .input("name", sql.VarChar(255), "Manual")
-        .input("completed", sql.Bit, 1)
-        .query(`
-          INSERT INTO Payments (id, userID, name, completed)
-          VALUES (@tgid, @userID, @name, @completed)
         `);
 
       // Fetch the newly created user to return to the client
