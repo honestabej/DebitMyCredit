@@ -1039,14 +1039,14 @@ app.post("/register", async (req, res, next) => {
           VALUES (@id, @email, @passwordHash)
         `);
 
-      // Create a "Manual" transfer group by default for all users
+      // Create a "Manual" payment by default for all users
       await pool.request()
         .input("tgid", sql.VarChar(50), tgid)
         .input("userID", sql.VarChar(50), id)
         .input("name", sql.VarChar(255), "Manual")
         .input("completed", sql.Bit, 1)
         .query(`
-          INSERT INTO TransferGroups (id, userID, name, completed)
+          INSERT INTO Payments (id, userID, name, completed)
           VALUES (@tgid, @userID, @name, @completed)
         `);
 
@@ -1837,7 +1837,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
             t.internalID AS id,
             t.externalID,
             t.accountInternalID AS accountID,
-            t.transferGroupID,
+            t.paymentID,
             t.amount,
             t.name,
             t.notes,
@@ -1851,12 +1851,12 @@ app.get("/user/data", authRequired, async (req, res, next) => {
           ORDER BY t.transactionDate DESC, t.createdAt DESC
         `);
 
-      // Fetch transfer groups
-      const transferGroupsResult = await pool.request()
+      // Fetch payments
+      const paymentsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
           SELECT id, name, completed, createdAt, updatedAt
-          FROM TransferGroups
+          FROM Payments
           WHERE userID = @userID
           ORDER BY createdAt ASC
         `);
@@ -1901,7 +1901,7 @@ app.get("/user/data", authRequired, async (req, res, next) => {
         user: userResult.recordset[0] || null,
         accounts: accountsResult.recordset || [],
         transactions: transactionsResult.recordset || [],
-        transferGroups: transferGroupsResult.recordset || [],
+        payments: paymentsResult.recordset || [],
         allocations: allocationsResult.recordset || []
       };
     });
@@ -2254,10 +2254,10 @@ app.post("/transaction/delete", authRequired, async (req, res, next) => {
   }
 });
 
-app.post("/transaction/transfer-group", authRequired, async (req, res, next) => {
+app.post("/transaction/payment", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
-    const { transactionID, transferGroupID } = req.body;
+    const { transactionID, paymentID } = req.body;
 
     if (!transactionID) {
       return res.status(400).json({ success: false, message: "transactionID is required" });
@@ -2267,10 +2267,10 @@ app.post("/transaction/transfer-group", authRequired, async (req, res, next) => 
       return pool.request()
         .input("transactionID", sql.UniqueIdentifier, transactionID)
         .input("userID", sql.UniqueIdentifier, userID)
-        .input("transferGroupID", sql.UniqueIdentifier, transferGroupID || null)
+        .input("paymentID", sql.UniqueIdentifier, paymentID || null)
         .query(`
           UPDATE Transactions
-          SET transferGroupID = @transferGroupID, updatedAt = SYSUTCDATETIME()
+          SET paymentID = @paymentID, updatedAt = SYSUTCDATETIME()
           WHERE internalID = @transactionID AND userID = @userID
         `);
     });
@@ -2279,14 +2279,14 @@ app.post("/transaction/transfer-group", authRequired, async (req, res, next) => 
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
 
-    res.json({ success: true, message: "Transfer group updated" });
+    res.json({ success: true, message: "Payment updated" });
 
   } catch (err) {
     next(err);
   }
 });
 
-app.post("/payment-group/create", authRequired, async (req, res, next) => {
+app.post("/payment/create", authRequired, async (req, res, next) => {
   try {
     const { id, userID, name, transactionIDs, completed, createdAt, updatedAt } = req.body;
 
@@ -2297,8 +2297,8 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
       });
     }
 
-    const paymentGroup = await queryWithRetry(async (pool) => {
-      // Create the new TransferGroup row
+    await queryWithRetry(async (pool) => {
+      // Create the new Payment row
       await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
@@ -2307,7 +2307,7 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
         .input("createdAt", sql.DateTimeOffset, createdAt)
         .input("updatedAt", sql.DateTimeOffset, updatedAt)
         .query(`
-          INSERT INTO TransferGroups (
+          INSERT INTO Payments (
             id, userID, name, completed, createdAt, updatedAt
           )
           VALUES (
@@ -2315,7 +2315,7 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
           )
         `);
 
-      // Update the transferGroupID of each transaction in the group
+      // Update the paymentID of each transaction in the payment
       const txnIDs = Array.isArray(transactionIDs) ? transactionIDs : [];
       for (const transactionID of txnIDs) {
         await pool.request()
@@ -2323,18 +2323,18 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
           .input("transactionID", sql.UniqueIdentifier, transactionID)
           .query(`
             UPDATE Transactions
-              SET transferGroupID = @id,
+              SET paymentID = @id,
                   updatedAt = SYSUTCDATETIME()
               WHERE internalID = @transactionID
           `);
       }
 
-      // Return the newly created payment group
+      // Return the newly created payment
       const result = await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .query(`
           SELECT id, name, completed, createdAt, updatedAt
-          FROM TransferGroups
+          FROM Payments
           WHERE id = @id
         `);
 
@@ -2343,7 +2343,7 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
 
     res.json({
       success: true,
-      message: "Payment group created"
+      message: "Payment created"
     });
 
   } catch (err) {
@@ -2351,7 +2351,7 @@ app.post("/payment-group/create", authRequired, async (req, res, next) => {
   }
 });
 
-app.post("/payment-group/delete", authRequired, async (req, res, next) => {
+app.post("/payment/delete", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
     const { id } = req.body;
@@ -2361,21 +2361,21 @@ app.post("/payment-group/delete", authRequired, async (req, res, next) => {
     }
 
     const result = await queryWithRetry(async (pool) => {
-      // Unlink any transactions that belong to this group
+      // Unlink any transactions that belong to this payment
       await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
           UPDATE Transactions
-          SET transferGroupID = NULL, updatedAt = SYSUTCDATETIME()
-          WHERE transferGroupID = @id AND userID = @userID
+          SET paymentID = NULL, updatedAt = SYSUTCDATETIME()
+          WHERE paymentID = @id AND userID = @userID
         `);
 
       const deleteResult = await pool.request()
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          DELETE FROM TransferGroups
+          DELETE FROM Payments
           WHERE id = @id AND userID = @userID AND name != 'Manual'
         `);
 
@@ -2383,17 +2383,17 @@ app.post("/payment-group/delete", authRequired, async (req, res, next) => {
     });
 
     if (result.rowsAffected === 0) {
-      return res.status(404).json({ success: false, message: "Payment group not found or cannot be deleted" });
+      return res.status(404).json({ success: false, message: "Payment not found or cannot be deleted" });
     }
 
-    res.json({ success: true, message: "Payment group deleted" });
+    res.json({ success: true, message: "Payment deleted" });
 
   } catch (err) {
     next(err);
   }
 });
 
-app.post("/payment-group/complete", authRequired, async (req, res, next) => {
+app.post("/payment/complete", authRequired, async (req, res, next) => {
   try {
     const userID = req.user.id;
     const { id } = req.body;
@@ -2401,7 +2401,7 @@ app.post("/payment-group/complete", authRequired, async (req, res, next) => {
     if (!id) {
       return res.status(400).json({
         success: false,
-        message: "PaymentGroup id is required"
+        message: "Payment id is required"
       });
     }
 
@@ -2410,7 +2410,7 @@ app.post("/payment-group/complete", authRequired, async (req, res, next) => {
         .input("id", sql.UniqueIdentifier, id)
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          UPDATE TransferGroups
+          UPDATE Payments
           SET completed = 1, updatedAt = SYSUTCDATETIME()
           WHERE id = @id AND userID = @userID
         `);
@@ -2418,12 +2418,12 @@ app.post("/payment-group/complete", authRequired, async (req, res, next) => {
     });
 
     if (result.rowsAffected === 0) {
-      return res.status(404).json({ success: false, message: "Payment group not found" });
+      return res.status(404).json({ success: false, message: "Payment not found" });
     }
 
     res.json({
       success: true,
-      message: "Payment group marked as completed"
+      message: "Payment marked as completed"
     });
 
   } catch (err) {
