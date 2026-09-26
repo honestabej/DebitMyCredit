@@ -288,21 +288,27 @@ class APIService {
         return try await makeRequest(endpoint: "/update/accounts", method: .post, body: body, token: token)
     }
     
-    // Create a new payment group
-    func createPaymentGroup(paymentGroup: APIModels.CreatePaymentGroup, token: String) async throws -> APIModels.GenericResponse {
-        return try await makeRequest(endpoint: "/payment-group/create", method: .post, body: paymentGroup, token: token)
+    // Create a new payment
+    func createPayment(payment: APIModels.CreatePayment, token: String) async throws -> APIModels.GenericResponse {
+        return try await makeRequest(endpoint: "/payment/create", method: .post, body: payment, token: token)
     }
 
-    // Delete a payment group
-    func deletePaymentGroup(id: UUID, token: String) async throws -> APIModels.GenericResponse {
+    // Delete a payment
+    func deletePayment(id: UUID, token: String) async throws -> APIModels.GenericResponse {
         struct Body: Encodable { let id: UUID }
-        return try await makeRequest(endpoint: "/payment-group/delete", method: .post, body: Body(id: id), token: token)
+        return try await makeRequest(endpoint: "/payment/delete", method: .post, body: Body(id: id), token: token)
     }
-    
-    // Mark a payment group as complete
-    func completePaymentGroup(id: UUID, token: String) async throws -> APIModels.GenericResponse {
-        struct Body: Encodable { let id: UUID }
-        return try await makeRequest(endpoint: "/payment-group/complete", method: .post, body: Body(id: id), token: token)
+
+    // Manually mark a single PaymentAccount as complete
+    func completePaymentAccount(paymentAccountID: UUID, token: String) async throws -> APIModels.GenericResponse {
+        let body = APIModels.CompletePaymentAccount(paymentAccountID: paymentAccountID)
+        return try await makeRequest(endpoint: "/payment/account/complete", method: .post, body: body, token: token)
+    }
+
+    // Link a cleared transaction to a PaymentAccount and mark it complete
+    func matchPaymentAccount(paymentAccountID: UUID, transactionID: UUID, token: String) async throws -> APIModels.GenericResponse {
+        let body = APIModels.MatchPaymentAccount(paymentAccountID: paymentAccountID, transactionID: transactionID)
+        return try await makeRequest(endpoint: "/payment/account/match", method: .post, body: body, token: token)
     }
 
     // Get server and database status
@@ -310,7 +316,7 @@ class APIService {
         return try await makeRequest(endpoint: "/status", method: .get)
     }
 
-    // Fetch all user data (accounts, transactions, transfer groups)
+    // Fetch all user data (accounts, transactions, payments)
     func fetchUserData(token: String) async throws -> APIModels.UserDataResponse {
         return try await makeRequest(endpoint: "/user/data", method: .get, token: token)
     }
@@ -357,9 +363,9 @@ class APIService {
         return try await makeRequest(endpoint: "/transaction/delete", method: .post, body: Body(id: id, accountUpdatedAt: isoFormatter.string(from: accountUpdatedAt)), token: token)
     }
 
-    // Update the transfer group for a transaction (pass nil transferGroupID to clear it)
-    func updateTransactionTransferGroup(transactionID: String, transferGroupID: UUID?, token: String) async throws -> APIModels.GenericResponse {
-        struct Body: Encodable { let transactionID: String; let transferGroupID: String? }
-        return try await makeRequest(endpoint: "/transaction/transfer-group", method: .post, body: Body(transactionID: transactionID, transferGroupID: transferGroupID?.uuidString), token: token)
+    // Update the payment for a transaction (pass nil paymentID to clear it)
+    func updateTransactionPayment(transactionID: String, paymentID: UUID?, token: String) async throws -> APIModels.GenericResponse {
+        struct Body: Encodable { let transactionID: String; let paymentID: String? }
+        return try await makeRequest(endpoint: "/transaction/payment", method: .post, body: Body(transactionID: transactionID, paymentID: paymentID?.uuidString), token: token)
     }
 }

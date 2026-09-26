@@ -9,13 +9,13 @@ extension CoreDataService {
         let total: Decimal
     }
 
-    // Fetches all unpaid credit transactions (no transferGroup) and groups their allocations
+    // Fetches all unpaid credit transactions (no payment) and groups their allocations
     func fetchUnpaidCreditSummary(forUserID userID: UUID, in context: NSManagedObjectContext) -> (byAccount: [UnpaidAllocationSummary], unallocated: Decimal) {
 
-        // Fetch all Credit transactions with no transferGroup for this user
+        // Fetch all Credit transactions with no payment for this user
         let txnFetch: NSFetchRequest<Transaction> = NSFetchRequest(entityName: "Transaction")
         txnFetch.predicate = NSPredicate(
-            format: "user.id == %@ AND account.accountType == %@ AND transferGroup == nil AND amount < 0",
+            format: "user.id == %@ AND account.accountType == %@ AND payment == nil AND amount < 0",
             userID as CVarArg,
             "Credit"
         )
@@ -67,8 +67,8 @@ extension CoreDataService {
     
     // Groups all allocations from a payment group's transactions by debit account.
     // Returns a summary per account and the total amount of any unallocated transactions.
-    func fetchPaidAllocationSummary(for transferGroup: TransferGroup) -> (byAccount: [PaidAllocationSummary], unallocated: Decimal) {
-        guard let txns = transferGroup.transactions as? Set<Transaction> else { return ([], 0) }
+    func fetchPaidAllocationSummary(for payment: Payment) -> (byAccount: [PaidAllocationSummary], unallocated: Decimal) {
+        guard let txns = payment.transactions as? Set<Transaction> else { return ([], 0) }
 
         var accountTotals: [String: Decimal] = [:]
         var accountColors: [String: String?] = [:]

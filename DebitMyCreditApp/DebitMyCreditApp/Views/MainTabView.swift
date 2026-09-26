@@ -39,7 +39,7 @@ struct MainTabView: View {
             .tag(Tab.transactions)
 
             NavigationStack {
-                PaymentGroupsView()
+                PaymentsView()
             }
             .tabItem {
                 Label("Payments", systemImage: "arrow.left.arrow.right")

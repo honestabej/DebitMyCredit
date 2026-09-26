@@ -10,8 +10,8 @@ extension Account {
         request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
             NSPredicate(format: "account == %@", account),
             NSCompoundPredicate(orPredicateWithSubpredicates: [
-                NSPredicate(format: "transaction.transferGroup == nil"),
-                NSPredicate(format: "transaction.transferGroup.completed == NO")
+                NSPredicate(format: "transaction.payment == nil"),
+                NSPredicate(format: "transaction.payment.completed == NO")
             ])
         ])
 
@@ -23,24 +23,12 @@ extension Account {
 
         // If there are none, return 0
         guard !allocations.isEmpty else { return .zero }
-
-        // Debug statements
-//        let accountName = account.name ?? "unknown"
-//        print("[unpaidTransactions] \(accountName): Contains \(allocations.count) unpaid Tx ──")
         
         // Sum the amount of unpaid transactions to be returned
         var runningTotal = Decimal(0)
         for alloc in allocations {
             let allocAmount = alloc.amount?.decimalValue ?? 0
             runningTotal += allocAmount
-            
-            // Debug statements
-//            let txnName = alloc.transaction?.name ?? "unknown txn"
-//            let txnAmount = alloc.transaction?.amount?.decimalValue ?? 0
-//            let groupName = alloc.transaction?.transferGroup?.name ?? "nil (no group)"
-//            let completed = alloc.transaction?.transferGroup?.completed ?? false
-//            print("  → \"\(txnName)\" | txnAmount: \(txnAmount) | allocAmount: \(allocAmount) | group: \"\(groupName)\" | completed: \(completed)")
-            
         }
 
         return NSDecimalNumber(decimal: abs(runningTotal))
@@ -183,6 +171,14 @@ extension CoreDataService {
     func getAccountsOfAccountSource(context: NSManagedObjectContext, accountSource: String) throws -> [Account] {
         let request: NSFetchRequest<Account> = NSFetchRequest(entityName: "Account")
         request.predicate = NSPredicate(format: "accountSource == %@", accountSource)
+        
+        return try context.fetch(request)
+    }
+    
+    // Get all accounts of accountType Credit
+    func getCreditAccounts(context: NSManagedObjectContext) throws -> [Account] {
+        let request: NSFetchRequest<Account> = NSFetchRequest(entityName: "Account")
+        request.predicate = NSPredicate(format: "accountType == %@", "Credit")
         
         return try context.fetch(request)
     }

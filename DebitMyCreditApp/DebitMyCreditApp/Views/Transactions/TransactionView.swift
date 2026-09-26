@@ -12,9 +12,9 @@ struct TransactionView: View {
     @State private var isSavingNote: Bool = false
     @State private var noteIsLoaded: Bool = false
 
-    @State private var selectedGroup: TransferGroup? = nil
-    @State private var hasGroupChange: Bool = false
-    @State private var showGroupPicker: Bool = false
+    @State private var selectedPayment: Payment? = nil
+    @State private var hasPaymentChange: Bool = false
+    @State private var showPaymentPicker: Bool = false
     @State private var groupButtonGlobalY: CGFloat = 0
 
     var body: some View {
@@ -62,7 +62,7 @@ struct TransactionView: View {
                 let displayAmount = transaction.amount
                 let isUnpaid = transaction.account?.accountType == "Credit"
                     && (transaction.amount?.decimalValue ?? 0) < 0
-                    && (transaction.transferGroup == nil || transaction.transferGroup?.completed == false)
+                    && (transaction.payment == nil || transaction.payment?.completed == false)
                 Text(displayAmount.map {
                     $0.decimalValue as Decimal
                 } .map {
@@ -110,13 +110,13 @@ struct TransactionView: View {
 
                     if !transaction.isOrphaned {
                         HStack {
-                            Text("Payment Group: ")
-                            
+                            Text("Payment: ")
+
                             Button {
-                                showGroupPicker = true
+                                showPaymentPicker = true
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text(selectedGroup?.name ?? "None")
+                                    Text(selectedPayment?.name ?? "None")
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                     Image(systemName: "chevron.down")
@@ -132,27 +132,27 @@ struct TransactionView: View {
                             } action: {
                                 groupButtonGlobalY = $0
                             }
-                            .popover(isPresented: $showGroupPicker, arrowEdge: groupButtonGlobalY > screenMidY ? .bottom : .top) {
-                                let groups: [TransferGroup] = {
+                            .popover(isPresented: $showPaymentPicker, arrowEdge: groupButtonGlobalY > screenMidY ? .bottom : .top) {
+                                let payments: [Payment] = {
                                     guard let userID = authManager.currentUser?.id else { return [] }
-                                    return CoreDataService.shared.fetchTransferGroups(forUserID: userID, in: viewContext)
+                                    return CoreDataService.shared.fetchPayments(forUserID: userID, in: viewContext)
                                 }()
                                 ScrollView {
                                     VStack(alignment: .leading, spacing: 0) {
                                         // "None" option to deselect
                                         Button {
-                                            if selectedGroup != nil {
-                                                selectedGroup = nil
-                                                hasGroupChange = true
+                                            if selectedPayment != nil {
+                                                selectedPayment = nil
+                                                hasPaymentChange = true
                                             }
-                                            showGroupPicker = false
+                                            showPaymentPicker = false
                                         } label: {
                                             HStack {
                                                 Text("None")
-                                                    .foregroundStyle(selectedGroup == nil ? Color.appOrange : .primary)
-                                                    .fontWeight(selectedGroup == nil ? .semibold : .regular)
+                                                    .foregroundStyle(selectedPayment == nil ? Color.appOrange : .primary)
+                                                    .fontWeight(selectedPayment == nil ? .semibold : .regular)
                                                 Spacer()
-                                                if selectedGroup == nil {
+                                                if selectedPayment == nil {
                                                     Image(systemName: "checkmark")
                                                         .foregroundStyle(Color.appOrange)
                                                 }
@@ -162,24 +162,24 @@ struct TransactionView: View {
                                             .contentShape(Rectangle())
                                         }
                                         .buttonStyle(.plain)
-                                        
-                                        ForEach(groups) { group in
+
+                                        ForEach(payments) { payment in
                                             Divider()
                                             Button {
-                                                if selectedGroup?.id == group.id {
-                                                    selectedGroup = nil
+                                                if selectedPayment?.id == payment.id {
+                                                    selectedPayment = nil
                                                 } else {
-                                                    selectedGroup = group
+                                                    selectedPayment = payment
                                                 }
-                                                hasGroupChange = true
-                                                showGroupPicker = false
+                                                hasPaymentChange = true
+                                                showPaymentPicker = false
                                             } label: {
                                                 HStack {
-                                                    Text(group.name ?? "")
-                                                        .foregroundStyle(selectedGroup?.id == group.id ? Color.appOrange : .primary)
-                                                        .fontWeight(selectedGroup?.id == group.id ? .semibold : .regular)
+                                                    Text(payment.name ?? "")
+                                                        .foregroundStyle(selectedPayment?.id == payment.id ? Color.appOrange : .primary)
+                                                        .fontWeight(selectedPayment?.id == payment.id ? .semibold : .regular)
                                                     Spacer()
-                                                    if selectedGroup?.id == group.id {
+                                                    if selectedPayment?.id == payment.id {
                                                         Image(systemName: "checkmark")
                                                             .foregroundStyle(Color.appOrange)
                                                     }
@@ -226,39 +226,39 @@ struct TransactionView: View {
         }
         .onAppear {
             editedNote = transaction.notes ?? ""
-            selectedGroup = transaction.transferGroup
+            selectedPayment = transaction.payment
             DispatchQueue.main.async { noteIsLoaded = true }
         }
         .onDisappear {
             if hasUnsavedNoteChanges {
                 saveNote()
             }
-            if hasGroupChange {
-                saveTransferGroup()
+            if hasPaymentChange {
+                savePayment()
             }
         }
     }
 
-    private func saveTransferGroup() {
+    private func savePayment() {
         guard let token = KeychainHelper.get("auth_token"),
               let txID = transaction.id?.uuidString else { return }
 
-        let previousGroup = transaction.transferGroup
-        transaction.transferGroup = selectedGroup
+        let previousPayment = transaction.payment
+        transaction.payment = selectedPayment
         try? viewContext.save()
 
         Task {
             do {
-                let _ = try await APIService.shared.updateTransactionTransferGroup(
+                let _ = try await APIService.shared.updateTransactionPayment(
                     transactionID: txID,
-                    transferGroupID: selectedGroup?.id,
+                    paymentID: selectedPayment?.id,
                     token: token
                 )
-                print("[TransactionView] Transfer group saved to server")
+                print("[TransactionView] Payment saved to server")
             } catch {
-                print("[TransactionView] Failed to save transfer group, reverting: \(error.localizedDescription)")
+                print("[TransactionView] Failed to save payment, reverting: \(error.localizedDescription)")
                 await MainActor.run {
-                    transaction.transferGroup = previousGroup
+                    transaction.payment = previousPayment
                     try? viewContext.save()
                 }
             }
@@ -601,7 +601,7 @@ struct AllocationRow: View {
 
 #Preview("Transactions") {
     let context = PersistenceController.preview.container.viewContext
-    return TransactionsView()
+    TransactionsView()
         .environment(\.managedObjectContext, context)
         .environmentObject(PersistenceController.previewAuthManager())
 }
@@ -623,8 +623,8 @@ struct AllocationRow: View {
     checking.balanceDate = Date()
     checking.accountColor = CoreDataService.randomAccountColor()
     
-    // Transfer group
-    let tg1 = TransferGroup(context: context)
+    // Payment
+    let tg1 = Payment(context: context)
     tg1.id = UUID()
     tg1.name = "Payment 3"
     tg1.createdAt = Date()
@@ -639,7 +639,7 @@ struct AllocationRow: View {
     tx.pending = false
     tx.account = checking
     tx.notes = "NORTH ITALIA SCOTTSDALE #580TF3"
-    tx.transferGroup = tg1
+    tx.payment = tg1
     
     return TransactionView(transaction: tx)
         .environment(\.managedObjectContext, context)

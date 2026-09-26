@@ -39,7 +39,8 @@ class APIModels {
         let user: UserInfo?
         let accounts: [Account]
         let transactions: [Transaction]
-        let transferGroups: [TransferGroup]
+        let payments: [Payment]
+        let paymentAccounts: [PaymentAccount]
         let allocations: [Allocation]
         
         struct UserInfo: Codable {
@@ -78,7 +79,7 @@ class APIModels {
             let id: UUID
             let externalID: String
             let accountID: String
-            let transferGroupID: String?
+            let paymentID: String?
             let amount: Double
             let name: String
             let notes: String?
@@ -88,10 +89,23 @@ class APIModels {
             let updatedAt: FlexibleDate?
         }
         
-        struct TransferGroup: Codable {
+        struct Payment: Codable {
             let id: String
             let name: String
             let completed: Bool
+            let paymentType: String
+            let creditCardAccountID: String?
+            let createdAt: FlexibleDate?
+            let updatedAt: FlexibleDate?
+        }
+
+        struct PaymentAccount: Codable {
+            let id: String
+            let paymentID: String
+            let accountInternalID: String
+            let paymentAmount: Double
+            let isComplete: Bool
+            let matchedTransactionID: String?
             let createdAt: FlexibleDate?
             let updatedAt: FlexibleDate?
         }
@@ -405,15 +419,32 @@ class APIModels {
         let message: String?
     }
     
-    // MARK: PaymentGroup Models
-    struct CreatePaymentGroup: Codable {
+    // MARK: Payment Models
+    struct PaymentAccountEntry: Codable {
+        let id: UUID
+        let accountInternalID: UUID
+        let paymentAmount: Double
+    }
+
+    struct CreatePayment: Codable {
         let id: UUID
         let userID: UUID
         let name: String
+        let paymentType: String
+        let creditCardAccountID: UUID
         let transactionIDs: [UUID]
-        let completed: Bool
-        let createdAt: FlexibleDate?
-        let updatedAt: FlexibleDate?
+        let paymentAccounts: [PaymentAccountEntry]
+        let createdAt: String
+        let updatedAt: String
+    }
+
+    struct CompletePaymentAccount: Codable {
+        let paymentAccountID: UUID
+    }
+
+    struct MatchPaymentAccount: Codable {
+        let paymentAccountID: UUID
+        let transactionID: UUID
     }
 
     struct SyncResponse: Codable {

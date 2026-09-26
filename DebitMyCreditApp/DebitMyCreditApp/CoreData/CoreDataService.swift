@@ -59,7 +59,7 @@ final class CoreDataService {
     func clearAllData(context: NSManagedObjectContext) {
         let entityNames = [
             "User",
-            "TransferGroup",
+            "Payment",
             "Transaction",
             "TransactionAllocation",
             "Account"
@@ -101,7 +101,7 @@ final class CoreDataService {
         user: APIModels.UserDataResponse.UserInfo?,
         accounts: [APIModels.Account],
         transactions: [APIModels.UserDataResponse.Transaction],
-        transferGroups: [APIModels.UserDataResponse.TransferGroup],
+        payments: [APIModels.UserDataResponse.Payment],
         allocations: [APIModels.UserDataResponse.Allocation],
         context: NSManagedObjectContext
     ) async {
@@ -253,47 +253,47 @@ final class CoreDataService {
                 }
             }
 
-            // 4. Sync Transfer Groups
-            for serverGroup in transferGroups {
+            // 4. Sync Payments
+            for serverPayment in payments {
                 // Convert String ID to UUID
-                guard let groupUUID = UUID(uuidString: serverGroup.id) else {
-                    print("[CoreDataService] WARNING: Skipping transfer group with invalid UUID: \(serverGroup.id)")
+                guard let paymentUUID = UUID(uuidString: serverPayment.id) else {
+                    print("[CoreDataService] WARNING: Skipping payment with invalid UUID: \(serverPayment.id)")
                     continue
                 }
-                
-                let groupFetch = TransferGroup.fetchRequest()
-                groupFetch.predicate = NSPredicate(format: "id == %@", groupUUID as CVarArg)
-                
-                let localGroup = (try? context.fetch(groupFetch).first) ?? TransferGroup(context: context)
-                localGroup.id = groupUUID
-                localGroup.name = serverGroup.name
-                localGroup.completed = serverGroup.completed
-                
+
+                let paymentFetch = Payment.fetchRequest()
+                paymentFetch.predicate = NSPredicate(format: "id == %@", paymentUUID as CVarArg)
+
+                let localPayment = (try? context.fetch(paymentFetch).first) ?? Payment(context: context)
+                localPayment.id = paymentUUID
+                localPayment.name = serverPayment.name
+                localPayment.completed = serverPayment.completed
+
                 // Set the user relationship
                 if let userEntity = userEntity {
-                    localGroup.user = userEntity
+                    localPayment.user = userEntity
                 }
-                
+
                 // Parse dates from FlexibleDate
-                if let createdAt = serverGroup.createdAt?.dateValue {
-                    localGroup.createdAt = createdAt
+                if let createdAt = serverPayment.createdAt?.dateValue {
+                    localPayment.createdAt = createdAt
                 }
-                
-                if let updatedAt = serverGroup.updatedAt?.dateValue {
-                    localGroup.updatedAt = updatedAt
+
+                if let updatedAt = serverPayment.updatedAt?.dateValue {
+                    localPayment.updatedAt = updatedAt
                 }
             }
-            
-            // 4b. Link transactions to their transfer groups
+
+            // 4b. Link transactions to their payments
             for serverTxn in transactions {
-                guard let groupIDString = serverTxn.transferGroupID,
-                      let groupUUID = UUID(uuidString: groupIDString) else {
-                    // No group — clear any stale local link
+                guard let paymentIDString = serverTxn.paymentID,
+                      let paymentUUID = UUID(uuidString: paymentIDString) else {
+                    // No payment — clear any stale local link
                     let txnFetch = Transaction.fetchRequest()
                     txnFetch.predicate = NSPredicate(format: "id == %@", serverTxn.id as CVarArg)
                     txnFetch.fetchLimit = 1
                     if let localTxn = try? context.fetch(txnFetch).first {
-                        localTxn.transferGroup = nil
+                        localTxn.payment = nil
                     }
                     continue
                 }
@@ -303,22 +303,22 @@ final class CoreDataService {
                 txnFetch.fetchLimit = 1
                 guard let localTxn = try? context.fetch(txnFetch).first else { continue }
 
-                let groupFetch = TransferGroup.fetchRequest()
-                groupFetch.predicate = NSPredicate(format: "id == %@", groupUUID as CVarArg)
-                groupFetch.fetchLimit = 1
-                if let localGroup = try? context.fetch(groupFetch).first {
-                    localTxn.transferGroup = localGroup
+                let paymentFetch = Payment.fetchRequest()
+                paymentFetch.predicate = NSPredicate(format: "id == %@", paymentUUID as CVarArg)
+                paymentFetch.fetchLimit = 1
+                if let localPayment = try? context.fetch(paymentFetch).first {
+                    localTxn.payment = localPayment
                 }
             }
 
-            // Delete any local TransferGroups not present in the server response
-            let serverGroupIDs = Set(transferGroups.compactMap { UUID(uuidString: $0.id) })
-            let allLocalGroupsFetch = TransferGroup.fetchRequest()
-            if let allLocalGroups = try? context.fetch(allLocalGroupsFetch) {
-                for localGroup in allLocalGroups {
-                    if let id = localGroup.id, !serverGroupIDs.contains(id) {
-                        context.delete(localGroup)
-                        print("[CoreDataService] Deleted stale transfer group: \(localGroup.name ?? "unknown") (id: \(id))")
+            // Delete any local Payments not present in the server response
+            let serverPaymentIDs = Set(payments.compactMap { UUID(uuidString: $0.id) })
+            let allLocalPaymentsFetch = Payment.fetchRequest()
+            if let allLocalPayments = try? context.fetch(allLocalPaymentsFetch) {
+                for localPayment in allLocalPayments {
+                    if let id = localPayment.id, !serverPaymentIDs.contains(id) {
+                        context.delete(localPayment)
+                        print("[CoreDataService] Deleted stale payment: \(localPayment.name ?? "unknown") (id: \(id))")
                     }
                 }
             }
@@ -354,7 +354,7 @@ final class CoreDataService {
                 if context.hasChanges {
                     print("[CoreDataService] Saving context with changes...")
                     try context.save()
-                    print("[CoreDataService] Successfully saved: \(accounts.count) accounts, \(transactions.count) transactions, \(transferGroups.count) transfer groups, \(allocations.count) allocations to Core Data")
+                    print("[CoreDataService] Successfully saved: \(accounts.count) accounts, \(transactions.count) transactions, \(payments.count) payments, \(allocations.count) allocations to Core Data")
                 } else {
                     print("[CoreDataService] No changes to save")
                 }

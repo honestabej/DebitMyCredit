@@ -170,7 +170,7 @@ struct AccountView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
-                        .padding(.top, 2)
+                        .padding(.top, 0)
                 }
                 
                 Text("Transactions: ")
@@ -223,95 +223,36 @@ struct AccountView: View {
         }
     }
     
+    // Lookup table so the row builder can find each cross-account transaction's allocated amount
+    private var allocatedAmounts: [NSManagedObjectID: NSDecimalNumber] {
+        Dictionary(uniqueKeysWithValues: allTransactionRows.compactMap { row in
+            guard let amount = row.allocatedAmount else { return nil }
+            return (row.transaction.objectID, amount)
+        })
+    }
+
     private var transactionsList: some View {
-        List {
-            // Remove default top padding of list
-            Color.clear
-                .frame(height: 0)
-                .listRowInsets(EdgeInsets(top: -20, leading: 0, bottom: 0, trailing: 0))
-                .listRowBackground(Color.lightBackground)
-                .listRowSeparator(.hidden)
-
-            // Pending section — always at top
-            if !pendingRows.isEmpty {
-                Section {
-                    ForEach(pendingRows, id: \.transaction.objectID) { row in
-                        TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount, dbtAcct: account)
-                            .padding(.horizontal, 18)
-                            .listRowInsets(EdgeInsets())
-                            .padding(.vertical, 10)
-                            .listRowBackground(Color.lightBackground)
-                            .listRowSeparator(.hidden)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if account.accountSource == "Manual" && row.allocatedAmount == nil {
-                                    Button(role: .destructive) {
-                                        deleteTransaction(row.transaction)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
+        let amounts = allocatedAmounts
+        return TransactionListView(
+            pendingTransactions: pendingRows.map(\.transaction),
+            settledByDay: settledRowsByDay.map { (day: $0.day, transactions: $0.rows.map(\.transaction)) },
+            row: { transaction in
+                TransactionRowView(
+                    transaction: transaction,
+                    allocatedAmount: amounts[transaction.objectID],
+                    dbtAcct: account
+                )
+            },
+            swipeActions: { transaction in
+                if account.accountSource == "Manual" && amounts[transaction.objectID] == nil {
+                    Button(role: .destructive) {
+                        deleteTransaction(transaction)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
-                } header: {
-                    VStack(spacing: 0) {
-                        Text("Pending")
-                            .font(.system(size: 15))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                        Divider()
-                    }
-                    .listRowInsets(EdgeInsets())
-//                    .background(Color.lightBackground)
-                    .padding(.horizontal, 15)
                 }
             }
-
-            // Settled transactions grouped by day
-            ForEach(settledRowsByDay, id: \.day) { group in
-                Section {
-                    ForEach(group.rows, id: \.transaction.objectID) { row in
-                        TransactionRowView(transaction: row.transaction, allocatedAmount: row.allocatedAmount, dbtAcct: account)
-                            .padding(.horizontal, 18)
-                            .listRowInsets(EdgeInsets())
-                            .padding(.vertical, 10)
-                            .listRowBackground(Color.lightBackground)
-                            .listRowSeparator(.hidden)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if account.accountSource == "Manual" && row.allocatedAmount == nil {
-                                    Button(role: .destructive) {
-                                        deleteTransaction(row.transaction)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                    }
-                } header: {
-                    VStack(spacing: 0) {
-                        Text(group.day.formatted(.dateTime.month(.wide).day().year()))
-                            .font(.system(size: 15))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                        Divider()
-                    }
-                    .listRowInsets(EdgeInsets())
-//                    .background(Color.lightBackground)
-                    .padding(.horizontal, 15)
-                }
-            }
-        }
-        .listStyle(.plain)
-        .listSectionSpacing(0)
-        .environment(\.defaultMinListHeaderHeight, 0)
-        .environment(\.defaultMinListRowHeight, 0)
-        .scrollContentBackground(.hidden)
-        .onAppear {
-            UITableView.appearance().sectionHeaderTopPadding = 1000
-        }
+        )
     }
 
 
@@ -632,7 +573,7 @@ struct TransactionRowView: View {
                     // Show allocated amount if present, otherwise full transaction amount
                     let displayAmount = allocatedAmount ?? transaction.amount
                     let amountDecimal = displayAmount.map { $0.decimalValue as Decimal }
-                    let isUnpaid = transaction.account != dbtAcct && (transaction.transferGroup == nil || transaction.transferGroup?.completed == false)
+                    let isUnpaid = transaction.account != dbtAcct && (transaction.payment == nil || transaction.payment?.completed == false)
                     let amountColor: Color = {
                         if isUnpaid { return .appOrange }
                         guard let val = amountDecimal else { return .primary }

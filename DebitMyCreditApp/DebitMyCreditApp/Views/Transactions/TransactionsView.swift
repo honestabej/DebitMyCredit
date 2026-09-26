@@ -93,61 +93,12 @@ struct TransactionsView: View {
     
     // View to display the list of transactions grouped by pending then by date
     private var transactionsList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                // Pending section — always at top
-                if !pendingTransactions.isEmpty {
-                    Section {
-                        ForEach(Array(pendingTransactions.enumerated()), id: \.element.objectID) { index, tx in
-                            TransactionRow(transaction: tx)
-                                .padding(.vertical, 8)
-                                .padding(.leading, 4)
-//                            if index < pendingTransactions.count - 1 {
-//                                Divider()
-//                            }
-                        }
-                    } header: {
-                        VStack(spacing: 2) {
-                            Text("Pending")
-                                .font(.system(size: 15))
-                                .fontWeight(.semibold)
-                                .foregroundColor(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.lightBackground)
-                            Divider()
-                        }
-                    }
-                    .padding(.horizontal, 15)
-                }
-
-                // Settled transactions grouped by day
-                ForEach(settledTransactionsByDay, id: \.day) { group in
-                    Section {
-                        ForEach(Array(group.transactions.enumerated()), id: \.element.objectID) { index, tx in
-                            TransactionRow(transaction: tx)
-                                .padding(.vertical, 8)
-                                .padding(.leading, 4)
-//                            if index < group.transactions.count - 1 {
-//                                Divider()
-//                            }
-                        }
-                    } header: {
-                        VStack(spacing: 2) {
-                            Text(group.day.formatted(.dateTime.month(.wide).day().year()))
-                                .font(.system(size: 15))
-                                .fontWeight(.semibold)
-                                .foregroundColor(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.lightBackground)
-                            Divider()
-                        }
-                    }
-                    .padding(.horizontal, 15)
-                }
-            }
+        TransactionListView(
+            pendingTransactions: pendingTransactions,
+            settledByDay: settledTransactionsByDay
+        ) { transaction in
+            TransactionRow(transaction: transaction)
         }
-        .scrollContentBackground(.hidden)
-        .background(Color.clear)
         .padding(.top, 10)
         .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 83) }
     }
@@ -380,10 +331,10 @@ struct TransactionsView: View {
     private var settledTransactionsByDay: [(day: Date, transactions: [Transaction])] {
         let calendar = Calendar.current
         let settled = transactions.filter {
-            !$0.pending && (!filterUnallocated || ($0.allocations as? Set<TransactionAllocation>)?.isEmpty == true)
+            !$0.pending && $0.transactionDate != nil && (!filterUnallocated || ($0.allocations as? Set<TransactionAllocation>)?.isEmpty == true)
         }
         let grouped = Dictionary(grouping: settled) { tx -> Date in
-            calendar.startOfDay(for: tx.transactionDate ?? .distantPast)
+            calendar.startOfDay(for: tx.transactionDate!)
         }
         return grouped
             .sorted { $0.key > $1.key }
@@ -424,7 +375,7 @@ struct TransactionRow: View {
         Button(action: { if (!fromPaymentGroup) { showTransactionDetail = true }}) {
             HStack{
                 VStack(spacing: 5) {
-                    // Middle row containg the transaction name and the amount
+                    // Top row containg the transaction name and the amount
                     HStack(spacing: 10) {
                         if transaction.isOrphaned {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -440,7 +391,9 @@ struct TransactionRow: View {
                         
                         Spacer()
                         
-                        let isUnpaid = transaction.transferGroup == nil || transaction.transferGroup?.completed == false
+                        let isUnpaid = transaction.account?.accountType == "Credit"
+                            && (transaction.amount?.decimalValue ?? 0) < 0
+                            && (transaction.payment == nil || transaction.payment?.completed == false)
                         let effectiveAmountColor: Color = isUnpaid ? .appOrange : (transaction.pending ? .secondary : .primary)
                         let displayAmount = transaction.amount
                         Text(displayAmount.map {

@@ -194,7 +194,7 @@ class AuthManager: ObservableObject {
                 user: response.user,
                 accounts: response.accounts,
                 transactions: response.transactions,
-                transferGroups: response.transferGroups,
+                payments: response.payments,
                 allocations: response.allocations,
                 context: viewContext
             )
