@@ -943,7 +943,7 @@ app.post("/manual/sync-connected-bank-data", async (_req, res, next) => {
 // ******* Google Sheet Specific Endpoints *******
 
 // Trigger from the google sheet to update Azure DB with new SimpleFIN / LunchFlow data
-app.post("/sync/sheets", verifySheets, async (req, res, next) => {
+app.post("/sheets/sync", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
 
