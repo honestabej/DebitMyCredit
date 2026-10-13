@@ -940,61 +940,6 @@ app.post("/manual/sync-connected-bank-data", async (_req, res, next) => {
   }
 });
 
-// ******* Google Sheet Specific Endpoints *******
-
-// Trigger from the google sheet to update Azure DB with new SimpleFIN / LunchFlow data
-app.post("/sheets/sync", verifySheets, async (req, res, next) => {
-  try {
-    const userID = req.user.id; // set by verifySheets
-
-    console.log(`[SYNC] Starting sheets sync for user ${userID}`);
-
-    // Get user's credentials for all connected services
-    const user = await queryWithRetry(async (pool) => {
-      const result = await pool.request()
-        .input("userID", sql.UniqueIdentifier, userID)
-        .query(`
-          SELECT
-            id,
-            simpleFinAccessURLData,
-            simpleFinAccessURLIV,
-            simpleFinAccessURLTag,
-            lunchFlowAPIKeyData,
-            lunchFlowAPIKeyIV,
-            lunchFlowAPIKeyTag
-          FROM Users
-          WHERE id = @userID
-        `);
-      return result.recordset[0];
-    });
-
-    const hasSimpleFin = user?.simpleFinAccessURLData && user?.simpleFinAccessURLIV && user?.simpleFinAccessURLTag;
-    const hasLunchFlow = user?.lunchFlowAPIKeyData && user?.lunchFlowAPIKeyIV && user?.lunchFlowAPIKeyTag;
-
-    if (!hasSimpleFin && !hasLunchFlow) {
-      return res.json({
-        success: false,
-        message: "No connected accounts found for user"
-      });
-    }
-
-    // Run all available syncs in parallel
-    const [simpleFinStats, lunchFlowStats] = await Promise.all([
-      hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(null),
-      hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(null),
-    ]);
-
-    res.json({
-      success: true,
-      message: "Sync complete",
-      stats: { simpleFin: simpleFinStats, lunchFlow: lunchFlowStats }
-    });
-
-  } catch (err) {
-    next(err);
-  }
-});
-
 // Gets all transactions for one of the User's accounts
 app.get("/account/transactions", verifySheets, async (req, res, next) => {
   try {
@@ -1111,8 +1056,196 @@ app.get("/account/transactions", verifySheets, async (req, res, next) => {
 
 
 
+// ******* Google Sheet Specific Endpoints *******
+
+// Trigger from the google sheet to update Azure DB with new SimpleFIN / LunchFlow data
+app.post("/sheets/sync", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+
+    console.log(`[SYNC] Starting sheets sync for user ${userID}`);
+
+    // Get user's credentials for all connected services
+    const user = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT
+            id,
+            simpleFinAccessURLData,
+            simpleFinAccessURLIV,
+            simpleFinAccessURLTag,
+            lunchFlowAPIKeyData,
+            lunchFlowAPIKeyIV,
+            lunchFlowAPIKeyTag
+          FROM Users
+          WHERE id = @userID
+        `);
+      return result.recordset[0];
+    });
+
+    const hasSimpleFin = user?.simpleFinAccessURLData && user?.simpleFinAccessURLIV && user?.simpleFinAccessURLTag;
+    const hasLunchFlow = user?.lunchFlowAPIKeyData && user?.lunchFlowAPIKeyIV && user?.lunchFlowAPIKeyTag;
+
+    if (!hasSimpleFin && !hasLunchFlow) {
+      return res.json({
+        success: false,
+        message: "No connected accounts found for user"
+      });
+    }
+
+    // Run all available syncs in parallel
+    const [simpleFinStats, lunchFlowStats] = await Promise.all([
+      hasSimpleFin ? syncSimpleFinDataForUser(user) : Promise.resolve(null),
+      hasLunchFlow ? syncLunchFlowDataForUser(user) : Promise.resolve(null),
+    ]);
+
+    res.json({
+      success: true,
+      message: "Sync complete",
+      stats: { simpleFin: simpleFinStats, lunchFlow: lunchFlowStats }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Create a new payment, Sheets always sets Bills as the account making the payment
+app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+    const { name, paymentAmount, creditAccountExternalID, billsAccountExternalID, paymentTransfers } = req.body;
+
+    // The sheets key only grants access to SHEETS_USER_ID, so a different userID in the body is rejected
+    if (req.body.userID && req.body.userID.toLowerCase() !== userID.toLowerCase()) {
+      return res.status(403).json({ success: false, message: "userID does not match the sheets key" });
+    }
+
+    if (name == null || String(name).trim() === "" || typeof paymentAmount !== "number" || !creditAccountExternalID || !billsAccountExternalID) {
+      return res.status(400).json({
+        success: false,
+        message: "name, paymentAmount, creditAccountExternalID, and billsAccountExternalID are all required"
+      });
+    }
+
+    if (creditAccountExternalID === billsAccountExternalID) {
+      return res.status(400).json({ success: false, message: "The credit account and bills account must be different" });
+    }
+
+    const transfers = Array.isArray(paymentTransfers) ? paymentTransfers : [];
+    if (transfers.some(t => !t.accountID || typeof t.amount !== "number")) {
+      return res.status(400).json({ success: false, message: "Each paymentTransfer needs an accountID and a numeric amount" });
+    }
+
+    const paymentName = String(name).trim();
+    const paymentID = uuidv4();
+
+    const result = await queryWithRetry(async (pool) => {
+      // Look up the internalIDs of every external account ID, only within this user's accounts
+      const externalIDs = [...new Set([creditAccountExternalID, billsAccountExternalID, ...transfers.map(t => t.accountID)])];
+      const lookup = pool.request().input("userID", sql.UniqueIdentifier, userID);
+      externalIDs.forEach((extID, i) => lookup.input(`ext${i}`, sql.VarChar(50), extID));
+
+      const accountsResult = await lookup.query(`
+        SELECT internalID, externalID
+        FROM Accounts
+        WHERE userID = @userID AND externalID IN (${externalIDs.map((_, i) => `@ext${i}`).join(", ")})
+      `);
+
+      const internalIDByExternal = {};
+      for (const row of accountsResult.recordset) {
+        internalIDByExternal[row.externalID] = row.internalID;
+      }
+
+      const missing = externalIDs.filter(extID => !internalIDByExternal[extID]);
+      if (missing.length > 0) {
+        return { missing };
+      }
+
+      // Payment names are unique per user (same rule the app enforces)
+      const existing = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("name", sql.NVarChar(255), paymentName)
+        .query(`SELECT id FROM Payments WHERE userID = @userID AND LOWER(name) = LOWER(@name)`);
+
+      if (existing.recordset.length > 0) {
+        return { duplicateName: true };
+      }
+
+      // Create the payment and its transfers atomically
+      const dbTransaction = new sql.Transaction(pool);
+      await dbTransaction.begin();
+
+      try {
+        await new sql.Request(dbTransaction)
+          .input("id", sql.UniqueIdentifier, paymentID)
+          .input("name", sql.NVarChar(255), paymentName)
+          .input("paymentAmount", sql.Decimal(18, 2), paymentAmount)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("creditAccountInternalID", sql.UniqueIdentifier, internalIDByExternal[creditAccountExternalID])
+          .input("paidFromAccountInternalID", sql.UniqueIdentifier, internalIDByExternal[billsAccountExternalID])
+          .query(`
+            INSERT INTO Payments (
+              id, name, paymentAmount, userID, creditAccountInternalID, paidFromAccountInternalID, createdAt, updatedAt
+            )
+            VALUES (
+              @id, @name, @paymentAmount, @userID, @creditAccountInternalID, @paidFromAccountInternalID, SYSUTCDATETIME(), SYSUTCDATETIME()
+            )
+          `);
+
+        // One transfer per account moving its share into the bills account
+        for (const transfer of transfers) {
+          await new sql.Request(dbTransaction)
+            .input("id", sql.UniqueIdentifier, uuidv4())
+            .input("transferAmount", sql.Decimal(18, 2), transfer.amount)
+            .input("paymentID", sql.UniqueIdentifier, paymentID)
+            .input("accountInternalID", sql.UniqueIdentifier, internalIDByExternal[transfer.accountID])
+            .query(`
+              INSERT INTO PaymentTransfers (
+                id, transferAmount, paymentID, accountInternalID, createdAt, updatedAt
+              )
+              VALUES (
+                @id, @transferAmount, @paymentID, @accountInternalID, SYSUTCDATETIME(), SYSUTCDATETIME()
+              )
+            `);
+        }
+
+        await dbTransaction.commit();
+      } catch (dbErr) {
+        await dbTransaction.rollback();
+        throw dbErr;
+      }
+
+      return {};
+    });
+
+    if (result.missing) {
+      return res.status(404).json({
+        success: false,
+        message: "No account found for these external IDs: " + result.missing.join(", ")
+      });
+    }
+
+    if (result.duplicateName) {
+      return res.status(409).json({ success: false, message: `A payment named "${paymentName}" already exists` });
+    }
+
+    res.json({ success: true, message: "Payment created", paymentID });
+
+  } catch (err) {
+    next(err);
+  }
+});
 
 
+
+
+
+
+
+
+// ******* iOS App Specific Endpoints *******
 
 
 
