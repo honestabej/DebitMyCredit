@@ -1150,6 +1150,12 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Each paymentTransfer needs an accountID and a numeric amount" });
     }
 
+    // External IDs of the credit card transactions this payment covers
+    const transactionExternalIDs = [...new Set(Array.isArray(req.body.transactions) ? req.body.transactions : [])];
+    if (transactionExternalIDs.some(id => typeof id !== "string" || id.trim() === "")) {
+      return res.status(400).json({ success: false, message: "transactions must be an array of external transaction IDs" });
+    }
+
     const paymentName = String(name).trim();
     const paymentID = uuidv4();
 
@@ -1183,6 +1189,38 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
 
       if (existing.recordset.length > 0) {
         return { duplicateName: true };
+      }
+
+      // Look up the credit card transactions to link, only within this user's credit account
+      let transactionInternalIDs = [];
+      if (transactionExternalIDs.length > 0) {
+        const txnLookup = pool.request()
+          .input("userID", sql.UniqueIdentifier, userID)
+          .input("creditAccountInternalID", sql.UniqueIdentifier, internalIDByExternal[creditAccountExternalID]);
+        transactionExternalIDs.forEach((extID, i) => txnLookup.input(`txn${i}`, sql.VarChar(50), extID));
+
+        const txnResult = await txnLookup.query(`
+          SELECT t.internalID, t.externalID, t.paymentID, p.name AS paymentName
+          FROM Transactions t
+          LEFT JOIN Payments p ON t.paymentID = p.id
+          WHERE t.userID = @userID
+            AND t.accountInternalID = @creditAccountInternalID
+            AND t.externalID IN (${transactionExternalIDs.map((_, i) => `@txn${i}`).join(", ")})
+        `);
+
+        const foundExternalIDs = new Set(txnResult.recordset.map(t => t.externalID));
+        const missingTransactions = transactionExternalIDs.filter(extID => !foundExternalIDs.has(extID));
+        if (missingTransactions.length > 0) {
+          return { missingTransactions };
+        }
+
+        // Don't silently move a transaction out of a payment it already belongs to
+        const alreadyLinked = txnResult.recordset.filter(t => t.paymentID);
+        if (alreadyLinked.length > 0) {
+          return { alreadyLinked: alreadyLinked.map(t => `${t.externalID} (payment "${t.paymentName}")`) };
+        }
+
+        transactionInternalIDs = txnResult.recordset.map(t => t.internalID);
       }
 
       // Create the payment and its transfers atomically
@@ -1223,13 +1261,25 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
             `);
         }
 
+        // Link the credit card transactions to this payment
+        for (const transactionInternalID of transactionInternalIDs) {
+          await new sql.Request(dbTransaction)
+            .input("paymentID", sql.UniqueIdentifier, paymentID)
+            .input("transactionID", sql.UniqueIdentifier, transactionInternalID)
+            .query(`
+              UPDATE Transactions
+              SET paymentID = @paymentID, updatedAt = SYSUTCDATETIME()
+              WHERE internalID = @transactionID
+            `);
+        }
+
         await dbTransaction.commit();
       } catch (dbErr) {
         await dbTransaction.rollback();
         throw dbErr;
       }
 
-      return {};
+      return { linkedTransactions: transactionInternalIDs.length };
     });
 
     if (result.missing) {
@@ -1239,17 +1289,28 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
       });
     }
 
-    res.json({ success: true, message: "Payment created", paymentID });
+    if (result.missingTransactions) {
+      return res.status(404).json({
+        success: false,
+        message: "No transaction on the credit account found for these external IDs: " + result.missingTransactions.join(", ")
+      });
+    }
+
+    if (result.alreadyLinked) {
+      return res.status(409).json({
+        success: false,
+        message: "These transactions already belong to another payment: " + result.alreadyLinked.join(", ")
+      });
+    }
+
+    res.json({ success: true, message: "Payment created", paymentID, linkedTransactions: result.linkedTransactions });
 
   } catch (err) {
     next(err);
   }
 });
 
-// Check for transactions in the account the match a Payment or PaymentTranfer.
-// A match is an outgoing transaction (pending or posted, posted preferred) on the same account, for the same amount,
-// dated no earlier than the day before the payment was created, that isn't already matched to anything else.
-// Completed items whose pending transaction was deleted by the sync get re-linked to the posted version.
+// Check for transactions in the account the match a Payment or PaymentTranfer.\
 app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
