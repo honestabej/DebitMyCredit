@@ -1227,11 +1227,197 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
       });
     }
 
-    if (result.duplicateName) {
-      return res.status(409).json({ success: false, message: `A payment named "${paymentName}" already exists` });
+    res.json({ success: true, message: "Payment created", paymentID });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Check for transactions in the account the match a Payment or PaymentTranfer
+app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+
+    // The sheets key only grants access to SHEETS_USER_ID, so a different userID in the body is rejected
+    if (req.body?.userID && req.body.userID.toLowerCase() !== userID.toLowerCase()) {
+      return res.status(403).json({ success: false, message: "userID does not match the sheets key" });
     }
 
-    res.json({ success: true, message: "Payment created", paymentID });
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const toCents = (amount) => Math.round(Math.abs(Number(amount)) * 100);
+
+    const result = await queryWithRetry(async (pool) => {
+      // Get all Payments that aren't fully completed
+      const paymentsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT p.id, p.name, p.paymentAmount, p.completed, p.paidFromAccountInternalID, p.createdAt,
+                 a.name AS accountName
+          FROM Payments p
+          LEFT JOIN Accounts a ON p.paidFromAccountInternalID = a.internalID
+          WHERE p.userID = @userID AND p.fullyCompleted = 0
+          ORDER BY p.createdAt ASC
+        `);
+
+      const payments = paymentsResult.recordset;
+      if (payments.length === 0) {
+        return { matchedPayments: [], matchedTransfers: [], stillOpen: [] };
+      }
+
+      // Get their PaymentTransfers that aren't completed
+      const transfersResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT pt.id, pt.paymentID, pt.transferAmount, pt.accountInternalID, p.name AS paymentName, p.createdAt,
+                 a.name AS accountName
+          FROM PaymentTransfers pt
+          INNER JOIN Payments p ON pt.paymentID = p.id
+          LEFT JOIN Accounts a ON pt.accountInternalID = a.internalID
+          WHERE p.userID = @userID AND p.fullyCompleted = 0 AND pt.completed = 0
+          ORDER BY p.createdAt ASC
+        `);
+
+      const openPayments = payments.filter(p => !p.completed && p.paidFromAccountInternalID);
+      const openTransfers = transfersResult.recordset;
+
+      // Get candidate transactions: posted, outgoing, on the accounts involved, since the oldest open payment,
+      // and not already matched to another payment or transfer
+      const oldestCreatedAt = new Date(Math.min(...payments.map(p => new Date(p.createdAt).getTime())) - DAY_MS);
+
+      const candidatesResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("since", sql.DateTimeOffset, oldestCreatedAt)
+        .query(`
+          SELECT t.internalID, t.externalID, t.accountInternalID, t.amount, t.name, t.transactionDate
+          FROM Transactions t
+          WHERE t.userID = @userID
+            AND t.pending = 0
+            AND t.amount < 0
+            AND t.transactionDate >= @since
+            AND t.accountInternalID IN (
+              SELECT paidFromAccountInternalID FROM Payments
+              WHERE userID = @userID AND fullyCompleted = 0 AND paidFromAccountInternalID IS NOT NULL
+              UNION
+              SELECT pt.accountInternalID FROM PaymentTransfers pt
+              INNER JOIN Payments p ON pt.paymentID = p.id
+              WHERE p.userID = @userID AND p.fullyCompleted = 0
+            )
+            AND NOT EXISTS (SELECT 1 FROM Payments p2 WHERE p2.matchedTransactionID = t.internalID)
+            AND NOT EXISTS (SELECT 1 FROM PaymentTransfers pt2 WHERE pt2.matchedTransactionID = t.internalID)
+          ORDER BY t.transactionDate ASC
+        `);
+
+      const candidates = candidatesResult.recordset;
+      const usedTransactionIDs = new Set();
+
+      // Earliest unused transaction on the account for the same amount, on or after the day before the payment was created
+      function findMatch(accountInternalID, amount, createdAt) {
+        const earliest = new Date(createdAt).getTime() - DAY_MS;
+        const match = candidates.find(t =>
+          !usedTransactionIDs.has(t.internalID) &&
+          t.accountInternalID === accountInternalID &&
+          toCents(t.amount) === toCents(amount) &&
+          new Date(t.transactionDate).getTime() >= earliest
+        );
+        if (match) usedTransactionIDs.add(match.internalID);
+        return match;
+      }
+
+      // Match oldest payments first so an older payment claims the earlier transaction
+      const matchedPayments = [];
+      const matchedTransfers = [];
+      const stillOpen = [];
+
+      for (const payment of openPayments) {
+        const match = findMatch(payment.paidFromAccountInternalID, payment.paymentAmount, payment.createdAt);
+        if (match) {
+          matchedPayments.push({ payment, match });
+        } else {
+          stillOpen.push({ type: "payment", paymentName: payment.name, accountName: payment.accountName, amount: payment.paymentAmount });
+        }
+      }
+
+      for (const transfer of openTransfers) {
+        const match = findMatch(transfer.accountInternalID, transfer.transferAmount, transfer.createdAt);
+        if (match) {
+          matchedTransfers.push({ transfer, match });
+        } else {
+          stillOpen.push({ type: "transfer", paymentName: transfer.paymentName, accountName: transfer.accountName, amount: transfer.transferAmount });
+        }
+      }
+
+      // Save the matches and update completion flags atomically
+      const dbTransaction = new sql.Transaction(pool);
+      await dbTransaction.begin();
+
+      try {
+        for (const { payment, match } of matchedPayments) {
+          await new sql.Request(dbTransaction)
+            .input("id", sql.UniqueIdentifier, payment.id)
+            .input("transactionID", sql.UniqueIdentifier, match.internalID)
+            .query(`
+              UPDATE Payments
+              SET matchedTransactionID = @transactionID, completed = 1, updatedAt = SYSUTCDATETIME()
+              WHERE id = @id
+            `);
+        }
+
+        for (const { transfer, match } of matchedTransfers) {
+          await new sql.Request(dbTransaction)
+            .input("id", sql.UniqueIdentifier, transfer.id)
+            .input("transactionID", sql.UniqueIdentifier, match.internalID)
+            .query(`
+              UPDATE PaymentTransfers
+              SET matchedTransactionID = @transactionID, completed = 1, updatedAt = SYSUTCDATETIME()
+              WHERE id = @id
+            `);
+        }
+
+        // A payment is fully completed once it and all of its transfers are completed
+        await new sql.Request(dbTransaction)
+          .input("userID", sql.UniqueIdentifier, userID)
+          .query(`
+            UPDATE p
+            SET p.fullyCompleted = 1, p.updatedAt = SYSUTCDATETIME()
+            FROM Payments p
+            WHERE p.userID = @userID
+              AND p.fullyCompleted = 0
+              AND p.completed = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM PaymentTransfers pt
+                WHERE pt.paymentID = p.id AND pt.completed = 0
+              )
+          `);
+
+        await dbTransaction.commit();
+      } catch (dbErr) {
+        await dbTransaction.rollback();
+        throw dbErr;
+      }
+
+      return {
+        matchedPayments: matchedPayments.map(({ payment, match }) => ({
+          paymentName: payment.name,
+          accountName: payment.accountName,
+          amount: payment.paymentAmount,
+          transactionExternalID: match.externalID,
+          transactionName: match.name,
+          transactionDate: match.transactionDate
+        })),
+        matchedTransfers: matchedTransfers.map(({ transfer, match }) => ({
+          paymentName: transfer.paymentName,
+          accountName: transfer.accountName,
+          amount: transfer.transferAmount,
+          transactionExternalID: match.externalID,
+          transactionName: match.name,
+          transactionDate: match.transactionDate
+        })),
+        stillOpen
+      };
+    });
+
+    res.json({ success: true, ...result });
 
   } catch (err) {
     next(err);
