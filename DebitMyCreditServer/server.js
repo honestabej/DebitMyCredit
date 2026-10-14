@@ -342,9 +342,15 @@ async function syncSimpleFinDataForUser(user) {
 
         for (const dbTxn of orphanedTxns.recordset) {
           if (!simpleFinTxnIds.includes(dbTxn.externalID)) {
+            // Unlink any payment/transfer matched to this pending txn (they stay completed and get re-matched
+            // to the posted version by /sheets/check-payments), then delete it
             await new sql.Request(transaction)
               .input("txnInternalID", sql.UniqueIdentifier, dbTxn.internalID)
-              .query(`DELETE FROM Transactions WHERE internalID = @txnInternalID`);
+              .query(`
+                UPDATE Payments SET matchedTransactionID = NULL, updatedAt = SYSUTCDATETIME() WHERE matchedTransactionID = @txnInternalID;
+                UPDATE PaymentTransfers SET matchedTransactionID = NULL, updatedAt = SYSUTCDATETIME() WHERE matchedTransactionID = @txnInternalID;
+                DELETE FROM Transactions WHERE internalID = @txnInternalID;
+              `);
 
             pendingTransactionsRemoved++;
           }
@@ -628,9 +634,15 @@ async function syncLunchFlowDataForUser(user) {
 
         for (const dbTxn of orphanedTxns.recordset) {
           if (!lfTxnIds.includes(dbTxn.externalID)) {
+            // Unlink any payment/transfer matched to this pending txn (they stay completed and get re-matched
+            // to the posted version by /sheets/check-payments), then delete it
             await new sql.Request(transaction)
               .input("txnInternalID", sql.UniqueIdentifier, dbTxn.internalID)
-              .query(`DELETE FROM Transactions WHERE internalID = @txnInternalID`);
+              .query(`
+                UPDATE Payments SET matchedTransactionID = NULL, updatedAt = SYSUTCDATETIME() WHERE matchedTransactionID = @txnInternalID;
+                UPDATE PaymentTransfers SET matchedTransactionID = NULL, updatedAt = SYSUTCDATETIME() WHERE matchedTransactionID = @txnInternalID;
+                DELETE FROM Transactions WHERE internalID = @txnInternalID;
+              `);
 
             pendingTransactionsRemoved++;
           }
@@ -1234,7 +1246,10 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
   }
 });
 
-// Check for transactions in the account the match a Payment or PaymentTranfer
+// Check for transactions in the account the match a Payment or PaymentTranfer.
+// A match is an outgoing transaction (pending or posted, posted preferred) on the same account, for the same amount,
+// dated no earlier than the day before the payment was created, that isn't already matched to anything else.
+// Completed items whose pending transaction was deleted by the sync get re-linked to the posted version.
 app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
@@ -1248,7 +1263,8 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
     const toCents = (amount) => Math.round(Math.abs(Number(amount)) * 100);
 
     const result = await queryWithRetry(async (pool) => {
-      // Get all Payments that aren't fully completed
+      // Payments that need a transaction: not completed yet, or completed but their matched
+      // pending transaction was deleted by the sync (needs re-linking to the posted version)
       const paymentsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
@@ -1256,70 +1272,74 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
                  a.name AS accountName
           FROM Payments p
           LEFT JOIN Accounts a ON p.paidFromAccountInternalID = a.internalID
-          WHERE p.userID = @userID AND p.fullyCompleted = 0
+          WHERE p.userID = @userID
+            AND p.paidFromAccountInternalID IS NOT NULL
+            AND (p.completed = 0 OR p.matchedTransactionID IS NULL)
           ORDER BY p.createdAt ASC
         `);
 
-      const payments = paymentsResult.recordset;
-      if (payments.length === 0) {
-        return { matchedPayments: [], matchedTransfers: [], stillOpen: [] };
-      }
-
-      // Get their PaymentTransfers that aren't completed
+      // PaymentTransfers that need a transaction, same rule
       const transfersResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT pt.id, pt.paymentID, pt.transferAmount, pt.accountInternalID, p.name AS paymentName, p.createdAt,
+          SELECT pt.id, pt.paymentID, pt.transferAmount, pt.completed, pt.accountInternalID, p.name AS paymentName, p.createdAt,
                  a.name AS accountName
           FROM PaymentTransfers pt
           INNER JOIN Payments p ON pt.paymentID = p.id
           LEFT JOIN Accounts a ON pt.accountInternalID = a.internalID
-          WHERE p.userID = @userID AND p.fullyCompleted = 0 AND pt.completed = 0
+          WHERE p.userID = @userID
+            AND (pt.completed = 0 OR pt.matchedTransactionID IS NULL)
           ORDER BY p.createdAt ASC
         `);
 
-      const openPayments = payments.filter(p => !p.completed && p.paidFromAccountInternalID);
+      const openPayments = paymentsResult.recordset;
       const openTransfers = transfersResult.recordset;
 
-      // Get candidate transactions: posted, outgoing, on the accounts involved, since the oldest open payment,
-      // and not already matched to another payment or transfer
-      const oldestCreatedAt = new Date(Math.min(...payments.map(p => new Date(p.createdAt).getTime())) - DAY_MS);
+      if (openPayments.length === 0 && openTransfers.length === 0) {
+        return { matchedPayments: [], matchedTransfers: [], stillOpen: [], unlinked: [] };
+      }
 
-      const candidatesResult = await pool.request()
+      // Get candidate transactions (pending or posted): outgoing, on the accounts involved, since the day before
+      // the oldest payment that needs one, and not already matched to another payment or transfer
+      const accountIDs = [...new Set([
+        ...openPayments.map(p => p.paidFromAccountInternalID),
+        ...openTransfers.map(t => t.accountInternalID)
+      ])];
+      const oldestCreatedAt = new Date(
+        Math.min(...[...openPayments, ...openTransfers].map(item => new Date(item.createdAt).getTime())) - DAY_MS
+      );
+
+      const candidatesRequest = pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
-        .input("since", sql.DateTimeOffset, oldestCreatedAt)
-        .query(`
-          SELECT t.internalID, t.externalID, t.accountInternalID, t.amount, t.name, t.transactionDate
-          FROM Transactions t
-          WHERE t.userID = @userID
-            AND t.pending = 0
-            AND t.amount < 0
-            AND t.transactionDate >= @since
-            AND t.accountInternalID IN (
-              SELECT paidFromAccountInternalID FROM Payments
-              WHERE userID = @userID AND fullyCompleted = 0 AND paidFromAccountInternalID IS NOT NULL
-              UNION
-              SELECT pt.accountInternalID FROM PaymentTransfers pt
-              INNER JOIN Payments p ON pt.paymentID = p.id
-              WHERE p.userID = @userID AND p.fullyCompleted = 0
-            )
-            AND NOT EXISTS (SELECT 1 FROM Payments p2 WHERE p2.matchedTransactionID = t.internalID)
-            AND NOT EXISTS (SELECT 1 FROM PaymentTransfers pt2 WHERE pt2.matchedTransactionID = t.internalID)
-          ORDER BY t.transactionDate ASC
-        `);
+        .input("since", sql.DateTimeOffset, oldestCreatedAt);
+      accountIDs.forEach((id, i) => candidatesRequest.input(`acct${i}`, sql.UniqueIdentifier, id));
+
+      const candidatesResult = await candidatesRequest.query(`
+        SELECT t.internalID, t.externalID, t.accountInternalID, t.amount, t.name, t.transactionDate, t.pending
+        FROM Transactions t
+        WHERE t.userID = @userID
+          AND t.amount < 0
+          AND t.transactionDate >= @since
+          AND t.accountInternalID IN (${accountIDs.map((_, i) => `@acct${i}`).join(", ")})
+          AND NOT EXISTS (SELECT 1 FROM Payments p2 WHERE p2.matchedTransactionID = t.internalID)
+          AND NOT EXISTS (SELECT 1 FROM PaymentTransfers pt2 WHERE pt2.matchedTransactionID = t.internalID)
+        ORDER BY t.transactionDate ASC
+      `);
 
       const candidates = candidatesResult.recordset;
       const usedTransactionIDs = new Set();
 
-      // Earliest unused transaction on the account for the same amount, on or after the day before the payment was created
+      // Earliest unused transaction on the account for the same amount, on or after the day before the payment
+      // was created. A posted transaction is preferred over a pending one when both exist.
       function findMatch(accountInternalID, amount, createdAt) {
         const earliest = new Date(createdAt).getTime() - DAY_MS;
-        const match = candidates.find(t =>
+        const matches = candidates.filter(t =>
           !usedTransactionIDs.has(t.internalID) &&
           t.accountInternalID === accountInternalID &&
           toCents(t.amount) === toCents(amount) &&
           new Date(t.transactionDate).getTime() >= earliest
         );
+        const match = matches.find(t => !t.pending) || matches[0];
         if (match) usedTransactionIDs.add(match.internalID);
         return match;
       }
@@ -1327,23 +1347,26 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
       // Match oldest payments first so an older payment claims the earlier transaction
       const matchedPayments = [];
       const matchedTransfers = [];
-      const stillOpen = [];
+      const stillOpen = [];  // not completed, no transaction found yet
+      const unlinked = [];   // completed, but its transaction was deleted and no replacement was found yet
 
       for (const payment of openPayments) {
         const match = findMatch(payment.paidFromAccountInternalID, payment.paymentAmount, payment.createdAt);
+        const summary = { type: "payment", paymentName: payment.name, accountName: payment.accountName, amount: payment.paymentAmount };
         if (match) {
           matchedPayments.push({ payment, match });
         } else {
-          stillOpen.push({ type: "payment", paymentName: payment.name, accountName: payment.accountName, amount: payment.paymentAmount });
+          (payment.completed ? unlinked : stillOpen).push(summary);
         }
       }
 
       for (const transfer of openTransfers) {
         const match = findMatch(transfer.accountInternalID, transfer.transferAmount, transfer.createdAt);
+        const summary = { type: "transfer", paymentName: transfer.paymentName, accountName: transfer.accountName, amount: transfer.transferAmount };
         if (match) {
           matchedTransfers.push({ transfer, match });
         } else {
-          stillOpen.push({ type: "transfer", paymentName: transfer.paymentName, accountName: transfer.accountName, amount: transfer.transferAmount });
+          (transfer.completed ? unlinked : stillOpen).push(summary);
         }
       }
 
@@ -1401,19 +1424,24 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
           paymentName: payment.name,
           accountName: payment.accountName,
           amount: payment.paymentAmount,
+          relinked: !!payment.completed, // was already completed, now linked to the replacement transaction
           transactionExternalID: match.externalID,
           transactionName: match.name,
-          transactionDate: match.transactionDate
+          transactionDate: match.transactionDate,
+          transactionPending: !!match.pending
         })),
         matchedTransfers: matchedTransfers.map(({ transfer, match }) => ({
           paymentName: transfer.paymentName,
           accountName: transfer.accountName,
           amount: transfer.transferAmount,
+          relinked: !!transfer.completed,
           transactionExternalID: match.externalID,
           transactionName: match.name,
-          transactionDate: match.transactionDate
+          transactionDate: match.transactionDate,
+          transactionPending: !!match.pending
         })),
-        stillOpen
+        stillOpen,
+        unlinked
       };
     });
 
