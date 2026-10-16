@@ -1540,7 +1540,7 @@ app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) =>
               WHERE pt.accountInternalID = a.internalID AND pt.completed = 0
             ), 0) AS pendingPayment
           FROM Accounts a
-          WHERE a.userID = @userID
+          WHERE a.userID = @userID AND a.accountSource = 'SimpleFIN'
           ORDER BY a.name
         `);
       return result.recordset;
