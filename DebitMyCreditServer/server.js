@@ -953,118 +953,7 @@ app.post("/manual/sync-connected-bank-data", async (_req, res, next) => {
 });
 
 // Gets all transactions for one of the User's accounts
-app.get("/account/transactions", verifySheets, async (req, res, next) => {
-  try {
-    const userID = req.user.id; // set by verifySheets
-    const { accountID } = req.query; // Uses externalID (from SimpleFIN or LunchFlow)
-    const startDateParam = req.query["start-date"]; // Optional unix timestamp (seconds), same as SimpleFIN
 
-    if (!accountID) {
-      return res.status(400).json({
-        success: false,
-        message: "accountID required as query parameter"
-      });
-    }
-
-    // Only include transactions on or after start-date when provided
-    let startDate = null;
-    if (startDateParam !== undefined) {
-      if (!/^\d+$/.test(startDateParam)) {
-        return res.status(400).json({
-          success: false,
-          message: "start-date must be a unix timestamp in seconds"
-        });
-      }
-      startDate = new Date(Number(startDateParam) * 1000);
-    }
-
-    // When SimpleFIN last updated this account
-    const balanceDate = await queryWithRetry(async (pool) => {
-      const result = await pool.request()
-        .input("userID", sql.UniqueIdentifier, userID)
-        .input("accountID", sql.VarChar(50), accountID)
-        .query(`
-          SELECT balanceDate
-          FROM Accounts
-          WHERE userID = @userID AND externalID = @accountID
-        `);
-      return result.recordset[0]?.balanceDate ?? null;
-    });
-
-    const transactions = await queryWithRetry(async (pool) => {
-      const result = await pool.request()
-        .input("userID", sql.UniqueIdentifier, userID)
-        .input("accountID", sql.VarChar(50), accountID)
-        .input("startDate", sql.DateTimeOffset, startDate)
-        .query(`
-          SELECT
-            t.internalID AS id,
-            t.externalID,
-            t.accountInternalID AS accountID,
-            t.paymentID,
-            t.amount,
-            t.name,
-            t.notes,
-            t.transactionDate,
-            t.pending,
-            t.createdAt,
-            t.updatedAt,
-            p.name AS paymentName,
-            CAST(CASE WHEN p.completed = 1 THEN 1 ELSE 0 END AS BIT) AS paid -- same rule as the app: paid once its payment is completed
-          FROM Transactions t
-          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
-          LEFT JOIN Payments p ON t.paymentID = p.id
-          WHERE a.userID = @userID AND a.externalID = @accountID
-            AND (@startDate IS NULL OR t.transactionDate >= @startDate)
-          ORDER BY t.transactionDate DESC, t.createdAt DESC
-        `);
-      return result.recordset;
-    });
-
-    // Allocations for the transactions above, with the name of the account each split is allocated to
-    const allocations = await queryWithRetry(async (pool) => {
-      const result = await pool.request()
-        .input("userID", sql.UniqueIdentifier, userID)
-        .input("accountID", sql.VarChar(50), accountID)
-        .input("startDate", sql.DateTimeOffset, startDate)
-        .query(`
-          SELECT
-            ta.transactionInternalID AS transactionID,
-            ta.accountInternalID AS accountID,
-            alloc.name AS accountName,
-            ta.amount
-          FROM TransactionAllocations ta
-          INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
-          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
-          INNER JOIN Accounts alloc ON ta.accountInternalID = alloc.internalID
-          WHERE a.userID = @userID AND a.externalID = @accountID
-            AND (@startDate IS NULL OR t.transactionDate >= @startDate)
-        `);
-      return result.recordset;
-    });
-
-    // Attach each transaction's allocations (empty array if none)
-    const allocationsByTxn = {};
-    for (const alloc of allocations) {
-      (allocationsByTxn[alloc.transactionID] ??= []).push({
-        accountID: alloc.accountID,
-        accountName: alloc.accountName,
-        amount: alloc.amount
-      });
-    }
-    for (const txn of transactions) {
-      txn.allocations = allocationsByTxn[txn.id] || [];
-    }
-
-    res.json({
-      success: true,
-      balanceDate,
-      transactions
-    });
-  } catch (err) {
-    next(err);
-  }
-});
 
 
 
@@ -1513,6 +1402,159 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
   }
 });
 
+// Get the transactions of an account
+app.get("/sheets/account/transactions", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+    const { accountID } = req.query; // Uses externalID (from SimpleFIN or LunchFlow)
+    const startDateParam = req.query["start-date"]; // Optional unix timestamp (seconds), same as SimpleFIN
+
+    if (!accountID) {
+      return res.status(400).json({
+        success: false,
+        message: "accountID required as query parameter"
+      });
+    }
+
+    // Only include transactions on or after start-date when provided
+    let startDate = null;
+    if (startDateParam !== undefined) {
+      if (!/^\d+$/.test(startDateParam)) {
+        return res.status(400).json({
+          success: false,
+          message: "start-date must be a unix timestamp in seconds"
+        });
+      }
+      startDate = new Date(Number(startDateParam) * 1000);
+    }
+
+    // When SimpleFIN last updated this account
+    const balanceDate = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("accountID", sql.VarChar(50), accountID)
+        .query(`
+          SELECT balanceDate
+          FROM Accounts
+          WHERE userID = @userID AND externalID = @accountID
+        `);
+      return result.recordset[0]?.balanceDate ?? null;
+    });
+
+    const transactions = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("accountID", sql.VarChar(50), accountID)
+        .input("startDate", sql.DateTimeOffset, startDate)
+        .query(`
+          SELECT
+            t.internalID AS id,
+            t.externalID,
+            t.accountInternalID AS accountID,
+            t.paymentID,
+            t.amount,
+            t.name,
+            t.notes,
+            t.transactionDate,
+            t.pending,
+            t.createdAt,
+            t.updatedAt,
+            p.name AS paymentName,
+            CAST(CASE WHEN p.completed = 1 THEN 1 ELSE 0 END AS BIT) AS paid -- same rule as the app: paid once its payment is completed
+          FROM Transactions t
+          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
+          LEFT JOIN Payments p ON t.paymentID = p.id
+          WHERE a.userID = @userID AND a.externalID = @accountID
+            AND (@startDate IS NULL OR t.transactionDate >= @startDate)
+          ORDER BY t.transactionDate DESC, t.createdAt DESC
+        `);
+      return result.recordset;
+    });
+
+    // Allocations for the transactions above, with the name of the account each split is allocated to
+    const allocations = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .input("accountID", sql.VarChar(50), accountID)
+        .input("startDate", sql.DateTimeOffset, startDate)
+        .query(`
+          SELECT
+            ta.transactionInternalID AS transactionID,
+            ta.accountInternalID AS accountID,
+            alloc.name AS accountName,
+            ta.amount
+          FROM TransactionAllocations ta
+          INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
+          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
+          INNER JOIN Accounts alloc ON ta.accountInternalID = alloc.internalID
+          WHERE a.userID = @userID AND a.externalID = @accountID
+            AND (@startDate IS NULL OR t.transactionDate >= @startDate)
+        `);
+      return result.recordset;
+    });
+
+    // Attach each transaction's allocations (empty array if none)
+    const allocationsByTxn = {};
+    for (const alloc of allocations) {
+      (allocationsByTxn[alloc.transactionID] ??= []).push({
+        accountID: alloc.accountID,
+        accountName: alloc.accountName,
+        amount: alloc.amount
+      });
+    }
+    for (const txn of transactions) {
+      txn.allocations = allocationsByTxn[txn.id] || [];
+    }
+
+    res.json({
+      success: true,
+      balanceDate,
+      transactions
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get the account balances of all of a user's accounts
+app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+
+    // pendingPayment = sum of this account's Payments (as the paying account) and PaymentTransfers that aren't completed yet
+    const accounts = await queryWithRetry(async (pool) => {
+      const result = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT
+            a.externalID,
+            a.name,
+            a.balance,
+            a.balanceDate,
+            ISNULL((
+              SELECT SUM(p.paymentAmount) FROM Payments p
+              WHERE p.paidFromAccountInternalID = a.internalID AND p.completed = 0
+            ), 0)
+            + ISNULL((
+              SELECT SUM(pt.transferAmount) FROM PaymentTransfers pt
+              WHERE pt.accountInternalID = a.internalID AND pt.completed = 0
+            ), 0) AS pendingPayment
+          FROM Accounts a
+          WHERE a.userID = @userID
+          ORDER BY a.name
+        `);
+      return result.recordset;
+    });
+
+    res.json({
+      success: true,
+      accounts
+    });
+
+  } catch (err) {
+    next(err);
+  }
+});
 
 
 
