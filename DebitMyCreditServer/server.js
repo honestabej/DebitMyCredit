@@ -1556,6 +1556,261 @@ app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) =>
   }
 });
 
+// Update the chase transactions with allocations and other info from the sheet to keep it and the DB in sync.
+// Body: [{ externalID, allocations: [{ accountID (external), amount }], paid: "Yes" | null, paymentName, notes }]
+// - allocations: replaced when different (null/missing leaves them alone, [] removes them)
+// - paymentName: links the transaction to that existing payment (null/blank unlinks it)
+// - notes: only updated when not blank
+// - paid: display-only in the sheet (whether the transaction is in a payment), so it's ignored here
+// When a transaction's payment or allocations change, the old payment's total and transfers are reduced by its
+// amount/allocations and the new payment's are increased. Completed flags and matched transactions are left as is.
+app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+    const items = Array.isArray(req.body) ? req.body : req.body?.transactions;
+
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ success: false, message: "Body must be an array of transactions" });
+    }
+
+    const toCents = (amount) => Math.round(Number(amount) * 100);
+
+    const result = await queryWithRetry(async (pool) => {
+      // Runs a query with an IN list of external IDs, in chunks to stay under SQL Server's parameter limit
+      async function selectByExternalIDs(ids, buildQuery) {
+        const rows = [];
+        for (let i = 0; i < ids.length; i += 500) {
+          const chunk = ids.slice(i, i + 500);
+          const request = pool.request().input("userID", sql.UniqueIdentifier, userID);
+          chunk.forEach((id, j) => request.input(`ext${j}`, sql.VarChar(50), id));
+          const r = await request.query(buildQuery(chunk.map((_, j) => `@ext${j}`).join(", ")));
+          rows.push(...r.recordset);
+        }
+        return rows;
+      }
+
+      // ---------- Load current state ----------
+      const externalIDs = [...new Set(items.map(item => item?.externalID).filter(Boolean))];
+
+      const txnRows = await selectByExternalIDs(externalIDs, (inList) => `
+        SELECT internalID, externalID, amount, paymentID, notes
+        FROM Transactions
+        WHERE userID = @userID AND externalID IN (${inList})
+      `);
+      const txnByExternal = Object.fromEntries(txnRows.map(t => [t.externalID, t]));
+
+      const allocRows = await selectByExternalIDs(externalIDs, (inList) => `
+        SELECT ta.transactionInternalID, ta.accountInternalID, ta.amount
+        FROM TransactionAllocations ta
+        INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
+        WHERE t.userID = @userID AND t.externalID IN (${inList})
+      `);
+      const allocsByTxn = {};
+      for (const a of allocRows) {
+        (allocsByTxn[a.transactionInternalID] ??= {})[a.accountInternalID] = toCents(a.amount);
+      }
+
+      const accountsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT internalID, externalID FROM Accounts WHERE userID = @userID AND externalID IS NOT NULL`);
+      const accountByExternal = Object.fromEntries(accountsResult.recordset.map(a => [a.externalID, a.internalID]));
+
+      const paymentsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT id, name, completed, paidFromAccountInternalID FROM Payments WHERE userID = @userID`);
+      const paymentByName = Object.fromEntries(paymentsResult.recordset.map(p => [p.name.trim().toLowerCase(), p]));
+      const paymentByID = Object.fromEntries(paymentsResult.recordset.map(p => [p.id, p]));
+
+      // ---------- Work out what changed ----------
+      const errors = [];
+      const changes = [];
+      const paymentDeltas = {};   // paymentID -> cents
+      const transferDeltas = {};  // "paymentID|accountInternalID" -> cents
+      let unchanged = 0;
+
+      // Adds (sign = 1) or removes (sign = -1) a transaction's amount and allocations from a payment
+      function applyToPayment(paymentID, amountCents, allocs, sign) {
+        if (!paymentID) return;
+        paymentDeltas[paymentID] = (paymentDeltas[paymentID] || 0) + sign * amountCents;
+        const payingAccount = paymentByID[paymentID]?.paidFromAccountInternalID;
+        for (const [accountID, cents] of Object.entries(allocs)) {
+          if (accountID === payingAccount) continue; // the paying account (Bills) doesn't transfer to itself
+          const key = `${paymentID}|${accountID}`;
+          transferDeltas[key] = (transferDeltas[key] || 0) + sign * cents;
+        }
+      }
+
+      for (const item of items) {
+        const txn = txnByExternal[item?.externalID];
+        if (!txn) {
+          errors.push({ externalID: item?.externalID ?? null, error: "Transaction not found" });
+          continue;
+        }
+
+        const oldAllocs = allocsByTxn[txn.internalID] || {};
+
+        // New allocations (null/missing = leave as is)
+        let newAllocs = oldAllocs;
+        if (Array.isArray(item.allocations)) {
+          newAllocs = {};
+          const unknownAccounts = [];
+          for (const alloc of item.allocations) {
+            const accountID = accountByExternal[alloc?.accountID];
+            if (!accountID) {
+              unknownAccounts.push(alloc?.accountID);
+              continue;
+            }
+            newAllocs[accountID] = (newAllocs[accountID] || 0) - Math.abs(toCents(alloc.amount)); // stored negative
+          }
+          if (unknownAccounts.length > 0) {
+            errors.push({ externalID: txn.externalID, error: "Unknown allocation account(s): " + unknownAccounts.join(", ") });
+            continue;
+          }
+        }
+
+        // New payment (null/blank = no payment)
+        const paymentName = item.paymentName == null ? "" : String(item.paymentName).trim();
+        const newPayment = paymentName ? paymentByName[paymentName.toLowerCase()] : null;
+        if (paymentName && !newPayment) {
+          errors.push({ externalID: txn.externalID, error: `No payment named "${paymentName}"` });
+          continue;
+        }
+        const newPaymentID = newPayment?.id ?? null;
+        const oldPaymentID = txn.paymentID ?? null;
+
+        const allocsChanged =
+          Object.keys(oldAllocs).length !== Object.keys(newAllocs).length ||
+          Object.entries(newAllocs).some(([accountID, cents]) => oldAllocs[accountID] !== cents);
+        const paymentChanged = oldPaymentID !== newPaymentID;
+        const notesChanged = typeof item.notes === "string" && item.notes.trim() !== "" && item.notes !== txn.notes;
+
+        if (!allocsChanged && !paymentChanged && !notesChanged) {
+          unchanged++;
+          continue;
+        }
+
+        if (allocsChanged || paymentChanged) {
+          const amountCents = toCents(txn.amount);
+          applyToPayment(oldPaymentID, amountCents, oldAllocs, -1);
+          applyToPayment(newPaymentID, amountCents, newAllocs, 1);
+        }
+
+        changes.push({ txn, newAllocs, allocsChanged, newPaymentID, paymentChanged, notesChanged, notes: item.notes });
+      }
+
+      // ---------- Save everything atomically ----------
+      const dbTransaction = new sql.Transaction(pool);
+      await dbTransaction.begin();
+
+      try {
+        for (const change of changes) {
+          if (change.allocsChanged) {
+            await new sql.Request(dbTransaction)
+              .input("transactionID", sql.UniqueIdentifier, change.txn.internalID)
+              .query(`DELETE FROM TransactionAllocations WHERE transactionInternalID = @transactionID`);
+
+            for (const [accountID, cents] of Object.entries(change.newAllocs)) {
+              await new sql.Request(dbTransaction)
+                .input("transactionID", sql.UniqueIdentifier, change.txn.internalID)
+                .input("accountID", sql.UniqueIdentifier, accountID)
+                .input("amount", sql.Decimal(18, 2), cents / 100)
+                .query(`
+                  INSERT INTO TransactionAllocations (transactionInternalID, accountInternalID, amount, createdAt, updatedAt)
+                  VALUES (@transactionID, @accountID, @amount, SYSUTCDATETIME(), SYSUTCDATETIME())
+                `);
+            }
+          }
+
+          if (change.paymentChanged || change.notesChanged) {
+            await new sql.Request(dbTransaction)
+              .input("transactionID", sql.UniqueIdentifier, change.txn.internalID)
+              .input("paymentID", sql.UniqueIdentifier, change.newPaymentID)
+              .input("notes", sql.NVarChar(sql.MAX), change.notes)
+              .input("setPayment", sql.Bit, change.paymentChanged)
+              .input("setNotes", sql.Bit, change.notesChanged)
+              .query(`
+                UPDATE Transactions
+                SET paymentID = CASE WHEN @setPayment = 1 THEN @paymentID ELSE paymentID END,
+                    notes = CASE WHEN @setNotes = 1 THEN @notes ELSE notes END,
+                    updatedAt = SYSUTCDATETIME()
+                WHERE internalID = @transactionID
+              `);
+          }
+        }
+
+        // Adjust payment totals
+        for (const [paymentID, cents] of Object.entries(paymentDeltas)) {
+          if (cents === 0) continue;
+          await new sql.Request(dbTransaction)
+            .input("id", sql.UniqueIdentifier, paymentID)
+            .input("delta", sql.Decimal(18, 2), cents / 100)
+            .query(`UPDATE Payments SET paymentAmount = paymentAmount + @delta, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
+        }
+
+        // Adjust transfers: update the existing one, create one if the account doesn't have one yet,
+        // and remove an open, unmatched transfer that drops to $0
+        for (const [key, cents] of Object.entries(transferDeltas)) {
+          if (cents === 0) continue;
+          const [paymentID, accountID] = key.split("|");
+
+          const existing = await new sql.Request(dbTransaction)
+            .input("paymentID", sql.UniqueIdentifier, paymentID)
+            .input("accountID", sql.UniqueIdentifier, accountID)
+            .query(`
+              SELECT TOP 1 id, transferAmount, completed, matchedTransactionID
+              FROM PaymentTransfers
+              WHERE paymentID = @paymentID AND accountInternalID = @accountID
+            `);
+
+          const transfer = existing.recordset[0];
+          if (transfer) {
+            const newCents = toCents(transfer.transferAmount) + cents;
+            if (newCents === 0 && !transfer.completed && !transfer.matchedTransactionID) {
+              await new sql.Request(dbTransaction)
+                .input("id", sql.UniqueIdentifier, transfer.id)
+                .query(`DELETE FROM PaymentTransfers WHERE id = @id`);
+            } else {
+              await new sql.Request(dbTransaction)
+                .input("id", sql.UniqueIdentifier, transfer.id)
+                .input("amount", sql.Decimal(18, 2), newCents / 100)
+                .query(`UPDATE PaymentTransfers SET transferAmount = @amount, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
+            }
+          } else {
+            await new sql.Request(dbTransaction)
+              .input("id", sql.UniqueIdentifier, uuidv4())
+              .input("amount", sql.Decimal(18, 2), cents / 100)
+              .input("paymentID", sql.UniqueIdentifier, paymentID)
+              .input("accountID", sql.UniqueIdentifier, accountID)
+              .query(`
+                INSERT INTO PaymentTransfers (id, transferAmount, paymentID, accountInternalID, createdAt, updatedAt)
+                VALUES (@id, @amount, @paymentID, @accountID, SYSUTCDATETIME(), SYSUTCDATETIME())
+              `);
+          }
+        }
+
+        await dbTransaction.commit();
+      } catch (dbErr) {
+        await dbTransaction.rollback();
+        throw dbErr;
+      }
+
+      return {
+        updated: changes.length,
+        unchanged,
+        paymentsAdjusted: Object.entries(paymentDeltas)
+          .filter(([, cents]) => cents !== 0)
+          .map(([paymentID, cents]) => ({ paymentName: paymentByID[paymentID]?.name, change: cents / 100 })),
+        errors
+      };
+    });
+
+    res.json({ success: true, ...result });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 
 
 
