@@ -1556,14 +1556,7 @@ app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) =>
   }
 });
 
-// Update the chase transactions with allocations and other info from the sheet to keep it and the DB in sync.
-// Body: [{ externalID, allocations: [{ accountID (external), amount }], paid: "Yes" | null, paymentName, notes }]
-// - allocations: replaced when different (null/missing leaves them alone, [] removes them)
-// - paymentName: links the transaction to that existing payment (null/blank unlinks it)
-// - notes: only updated when not blank
-// - paid: display-only in the sheet (whether the transaction is in a payment), so it's ignored here
-// When a transaction's payment or allocations change, the old payment's total and transfers are reduced by its
-// amount/allocations and the new payment's are increased. Completed flags and matched transactions are left as is.
+// Keep the info from the Chase Transactions sheet and the DB in sync
 app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
@@ -1617,28 +1610,15 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
 
       const paymentsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
-        .query(`SELECT id, name, completed, paidFromAccountInternalID FROM Payments WHERE userID = @userID`);
+        .query(`SELECT id, name, paymentAmount, completed, paidFromAccountInternalID FROM Payments WHERE userID = @userID`);
       const paymentByName = Object.fromEntries(paymentsResult.recordset.map(p => [p.name.trim().toLowerCase(), p]));
       const paymentByID = Object.fromEntries(paymentsResult.recordset.map(p => [p.id, p]));
 
       // ---------- Work out what changed ----------
       const errors = [];
       const changes = [];
-      const paymentDeltas = {};   // paymentID -> cents
-      const transferDeltas = {};  // "paymentID|accountInternalID" -> cents
+      const affectedPayments = new Set(); // payments whose transactions or allocations changed, recomputed below
       let unchanged = 0;
-
-      // Adds (sign = 1) or removes (sign = -1) a transaction's amount and allocations from a payment
-      function applyToPayment(paymentID, amountCents, allocs, sign) {
-        if (!paymentID) return;
-        paymentDeltas[paymentID] = (paymentDeltas[paymentID] || 0) + sign * amountCents;
-        const payingAccount = paymentByID[paymentID]?.paidFromAccountInternalID;
-        for (const [accountID, cents] of Object.entries(allocs)) {
-          if (accountID === payingAccount) continue; // the paying account (Bills) doesn't transfer to itself
-          const key = `${paymentID}|${accountID}`;
-          transferDeltas[key] = (transferDeltas[key] || 0) + sign * cents;
-        }
-      }
 
       const seenExternalIDs = new Set();
 
@@ -1699,15 +1679,15 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
         }
 
         if (allocsChanged || paymentChanged) {
-          const amountCents = toCents(txn.amount);
-          applyToPayment(oldPaymentID, amountCents, oldAllocs, -1);
-          applyToPayment(newPaymentID, amountCents, newAllocs, 1);
+          if (oldPaymentID) affectedPayments.add(oldPaymentID);
+          if (newPaymentID) affectedPayments.add(newPaymentID);
         }
 
         changes.push({ txn, newAllocs, allocsChanged, newPaymentID, paymentChanged, notesChanged, notes: item.notes });
       }
 
       // ---------- Save everything atomically ----------
+      const paymentsAdjusted = [];
       const dbTransaction = new sql.Transaction(pool);
       await dbTransaction.begin();
 
@@ -1747,53 +1727,89 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
           }
         }
 
-        // Adjust payment totals
-        for (const [paymentID, cents] of Object.entries(paymentDeltas)) {
-          if (cents === 0) continue;
-          await new sql.Request(dbTransaction)
-            .input("id", sql.UniqueIdentifier, paymentID)
-            .input("delta", sql.Decimal(18, 2), cents / 100)
-            .query(`UPDATE Payments SET paymentAmount = paymentAmount + @delta, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
-        }
+        // Recompute each affected payment from what's linked to it now: the total is the sum of its transactions,
+        // and each account's transfer is the sum of that account's allocations on those transactions.
+        // Completed flags and matched transactions are left as is, even if the amount changes.
+        for (const paymentID of affectedPayments) {
+          const payment = paymentByID[paymentID];
+          const payingAccount = payment.paidFromAccountInternalID ?? null;
+          let transfersChanged = false;
 
-        // Adjust transfers: update the existing one, create one if the account doesn't have one yet,
-        // and remove an open, unmatched transfer that drops to $0
-        for (const [key, cents] of Object.entries(transferDeltas)) {
-          if (cents === 0) continue;
-          const [paymentID, accountID] = key.split("|");
-
-          const existing = await new sql.Request(dbTransaction)
+          const totalResult = await new sql.Request(dbTransaction)
             .input("paymentID", sql.UniqueIdentifier, paymentID)
-            .input("accountID", sql.UniqueIdentifier, accountID)
-            .query(`
-              SELECT TOP 1 id, transferAmount, completed, matchedTransactionID
-              FROM PaymentTransfers
-              WHERE paymentID = @paymentID AND accountInternalID = @accountID
-            `);
+            .query(`SELECT ISNULL(SUM(amount), 0) AS total FROM Transactions WHERE paymentID = @paymentID`);
+          const newTotalCents = toCents(totalResult.recordset[0].total);
+          const oldTotalCents = toCents(payment.paymentAmount);
 
-          const transfer = existing.recordset[0];
-          if (transfer) {
-            const newCents = toCents(transfer.transferAmount) + cents;
-            if (newCents === 0 && !transfer.completed && !transfer.matchedTransactionID) {
-              await new sql.Request(dbTransaction)
-                .input("id", sql.UniqueIdentifier, transfer.id)
-                .query(`DELETE FROM PaymentTransfers WHERE id = @id`);
-            } else {
-              await new sql.Request(dbTransaction)
-                .input("id", sql.UniqueIdentifier, transfer.id)
-                .input("amount", sql.Decimal(18, 2), newCents / 100)
-                .query(`UPDATE PaymentTransfers SET transferAmount = @amount, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
-            }
-          } else {
+          if (newTotalCents !== oldTotalCents) {
             await new sql.Request(dbTransaction)
-              .input("id", sql.UniqueIdentifier, uuidv4())
-              .input("amount", sql.Decimal(18, 2), cents / 100)
-              .input("paymentID", sql.UniqueIdentifier, paymentID)
-              .input("accountID", sql.UniqueIdentifier, accountID)
-              .query(`
-                INSERT INTO PaymentTransfers (id, transferAmount, paymentID, accountInternalID, createdAt, updatedAt)
-                VALUES (@id, @amount, @paymentID, @accountID, SYSUTCDATETIME(), SYSUTCDATETIME())
-              `);
+              .input("id", sql.UniqueIdentifier, paymentID)
+              .input("amount", sql.Decimal(18, 2), newTotalCents / 100)
+              .query(`UPDATE Payments SET paymentAmount = @amount, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
+          }
+
+          // Allocations per account, skipping the paying account (Bills doesn't transfer to itself)
+          const allocTotalsResult = await new sql.Request(dbTransaction)
+            .input("paymentID", sql.UniqueIdentifier, paymentID)
+            .input("payingAccount", sql.UniqueIdentifier, payingAccount)
+            .query(`
+              SELECT ta.accountInternalID, SUM(ta.amount) AS total
+              FROM TransactionAllocations ta
+              INNER JOIN Transactions t ON ta.transactionInternalID = t.internalID
+              WHERE t.paymentID = @paymentID
+                AND (@payingAccount IS NULL OR ta.accountInternalID <> @payingAccount)
+              GROUP BY ta.accountInternalID
+            `);
+          const targetByAccount = Object.fromEntries(
+            allocTotalsResult.recordset.map(r => [r.accountInternalID, toCents(r.total)])
+          );
+
+          const transfersResult = await new sql.Request(dbTransaction)
+            .input("paymentID", sql.UniqueIdentifier, paymentID)
+            .query(`
+              SELECT id, accountInternalID, transferAmount, completed, matchedTransactionID
+              FROM PaymentTransfers
+              WHERE paymentID = @paymentID
+            `);
+          const transferByAccount = {};
+          for (const transfer of transfersResult.recordset) {
+            transferByAccount[transfer.accountInternalID] ??= transfer;
+          }
+
+          // Update existing transfers, create missing ones, and remove open, unmatched ones that drop to $0
+          for (const accountID of new Set([...Object.keys(targetByAccount), ...Object.keys(transferByAccount)])) {
+            const targetCents = targetByAccount[accountID] || 0;
+            const transfer = transferByAccount[accountID];
+
+            if (transfer) {
+              if (targetCents === 0 && !transfer.completed && !transfer.matchedTransactionID) {
+                await new sql.Request(dbTransaction)
+                  .input("id", sql.UniqueIdentifier, transfer.id)
+                  .query(`DELETE FROM PaymentTransfers WHERE id = @id`);
+                transfersChanged = true;
+              } else if (targetCents !== toCents(transfer.transferAmount)) {
+                await new sql.Request(dbTransaction)
+                  .input("id", sql.UniqueIdentifier, transfer.id)
+                  .input("amount", sql.Decimal(18, 2), targetCents / 100)
+                  .query(`UPDATE PaymentTransfers SET transferAmount = @amount, updatedAt = SYSUTCDATETIME() WHERE id = @id`);
+                transfersChanged = true;
+              }
+            } else if (targetCents !== 0) {
+              await new sql.Request(dbTransaction)
+                .input("id", sql.UniqueIdentifier, uuidv4())
+                .input("amount", sql.Decimal(18, 2), targetCents / 100)
+                .input("paymentID", sql.UniqueIdentifier, paymentID)
+                .input("accountID", sql.UniqueIdentifier, accountID)
+                .query(`
+                  INSERT INTO PaymentTransfers (id, transferAmount, paymentID, accountInternalID, createdAt, updatedAt)
+                  VALUES (@id, @amount, @paymentID, @accountID, SYSUTCDATETIME(), SYSUTCDATETIME())
+                `);
+              transfersChanged = true;
+            }
+          }
+
+          if (newTotalCents !== oldTotalCents || transfersChanged) {
+            paymentsAdjusted.push({ paymentName: payment.name, oldAmount: oldTotalCents / 100, newAmount: newTotalCents / 100 });
           }
         }
 
@@ -1806,14 +1822,54 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
       return {
         updated: changes.length,
         unchanged,
-        paymentsAdjusted: Object.entries(paymentDeltas)
-          .filter(([, cents]) => cents !== 0)
-          .map(([paymentID, cents]) => ({ paymentName: paymentByID[paymentID]?.name, change: cents / 100 })),
+        paymentsAdjusted,
         errors
       };
     });
 
     res.json({ success: true, ...result });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get all of the user's payments and their transfers
+app.get("/sheets/payments", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id; // set by verifySheets
+
+    const result = await queryWithRetry(async (pool) => {
+      // accountName is the account making the payment (Bills)
+      const paymentsResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT p.name, a.name AS accountName, p.paymentAmount AS amount
+          FROM Payments p
+          LEFT JOIN Accounts a ON p.paidFromAccountInternalID = a.internalID
+          WHERE p.userID = @userID
+          ORDER BY p.createdAt ASC
+        `);
+
+      // accountName is the account transferring its share to the paying account
+      const transfersResult = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT p.name AS paymentName, a.name AS accountName, pt.transferAmount AS amount
+          FROM PaymentTransfers pt
+          INNER JOIN Payments p ON pt.paymentID = p.id
+          LEFT JOIN Accounts a ON pt.accountInternalID = a.internalID
+          WHERE p.userID = @userID
+          ORDER BY p.createdAt ASC, a.name ASC
+        `);
+
+      return {
+        payments: paymentsResult.recordset,
+        paymentTransfers: transfersResult.recordset
+      };
+    });
+
+    res.json(result);
 
   } catch (err) {
     next(err);
