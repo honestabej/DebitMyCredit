@@ -1531,13 +1531,21 @@ app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) =>
             a.name,
             a.balance,
             a.balanceDate,
+            -- Outgoing: payments this account is making that haven't cleared yet
             ISNULL((
               SELECT SUM(p.paymentAmount) FROM Payments p
               WHERE p.paidFromAccountInternalID = a.internalID AND p.completed = 0
             ), 0)
+            -- Outgoing: transfers this account is sending to a paying account that haven't cleared yet
             + ISNULL((
               SELECT SUM(pt.transferAmount) FROM PaymentTransfers pt
               WHERE pt.accountInternalID = a.internalID AND pt.completed = 0
+            ), 0)
+            -- Incoming: transfers into this account's payments that haven't arrived yet (stored negative, so flipped)
+            + ISNULL((
+              SELECT SUM(-pt.transferAmount) FROM PaymentTransfers pt
+              INNER JOIN Payments p ON pt.paymentID = p.id
+              WHERE p.paidFromAccountInternalID = a.internalID AND pt.completed = 0
             ), 0) AS pendingPayment
           FROM Accounts a
           WHERE a.userID = @userID AND a.accountSource = 'SimpleFIN'
