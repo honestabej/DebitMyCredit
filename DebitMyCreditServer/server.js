@@ -1640,12 +1640,21 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
         }
       }
 
+      const seenExternalIDs = new Set();
+
       for (const item of items) {
         const txn = txnByExternal[item?.externalID];
         if (!txn) {
           errors.push({ externalID: item?.externalID ?? null, error: "Transaction not found" });
           continue;
         }
+
+        // A repeated row would apply its payment/transfer changes twice, so only the first one is used
+        if (seenExternalIDs.has(txn.externalID)) {
+          errors.push({ externalID: txn.externalID, error: "Duplicate row, only the first one was applied" });
+          continue;
+        }
+        seenExternalIDs.add(txn.externalID);
 
         const oldAllocs = allocsByTxn[txn.internalID] || {};
 
