@@ -952,11 +952,6 @@ app.post("/manual/sync-connected-bank-data", async (_req, res, next) => {
   }
 });
 
-// Gets all transactions for one of the User's accounts
-
-
-
-
 // ******* Google Sheet Specific Endpoints *******
 
 // Trigger from the google sheet to update Azure DB with new SimpleFIN / LunchFlow data
@@ -1013,7 +1008,7 @@ app.post("/sheets/sync", verifySheets, async (req, res, next) => {
 });
 
 // Create a new payment, Sheets always sets Bills as the account making the payment
-app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
+app.post("/sheets/payment/create", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
     const { name, paymentAmount, creditAccountExternalID, billsAccountExternalID, paymentTransfers } = req.body;
@@ -1199,8 +1194,44 @@ app.post("/sheets/make-payment", verifySheets, async (req, res, next) => {
   }
 });
 
+// Get all transactions of the sheet user's accounts where the description contains "Transfer" or "Chase"
+app.get("/sheets/payments/get", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id;
+
+    // Get all of the user's Payments and PaymentTransfers
+    const paymentsAndTransfers = await queryWithRetry(async (pool) => {
+      // Get all of the user's payments
+      const payments = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT id, name, paymentAmount, completed, fullyCompleted
+          FROM Payments WHERE userID = @userID`);
+
+      // Get all of the user's transfers (PaymentTransfers has no userID, so filter through its payment)
+      const transfers = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`SELECT pt.id, pt.paymentID, pt.transferAmount, pt.completed, pt.accountInternalID, pt.matchedTransactionID
+          FROM PaymentTransfers pt
+          INNER JOIN Payments p ON pt.paymentID = p.id
+          WHERE p.userID = @userID`);
+
+      // Attach each payment's transfers to it
+      for (const payment of payments.recordset) {
+        payment.transfers = transfers.recordset.filter(t => t.paymentID === payment.id);
+      }
+
+      return payments.recordset;
+    });
+
+    res.json(paymentsAndTransfers)
+
+  } catch (err) {
+    next(err)
+  }
+});
+
 // Check for transactions in the account the match a Payment or PaymentTranfer.\
-app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
+app.post("/sheets/payments/auto-complete", verifySheets, async (req, res, next) => {
   try {
     const userID = req.user.id; // set by verifySheets
 
@@ -1399,6 +1430,20 @@ app.post("/sheets/check-payments", verifySheets, async (req, res, next) => {
 
   } catch (err) {
     next(err);
+  }
+});
+
+// Manually assign transactions to a payment and complete them
+app.post("/sheets/payments/manual-complete", verifySheets, async (req, res, next) => {
+  try {
+    const userID = req.user.id
+
+    const matched = await queryWithRetry(async (pool) => {
+      
+    })
+
+  } catch(err) {
+    next(err)
   }
 });
 
@@ -1839,6 +1884,44 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
 
   } catch (err) {
     next(err);
+  }
+});
+
+// Get just transactions with "*chase*" or "*transfer*" in the description to be used for manually matching to Payments/Transfers
+app.get("/sheets/transactions/payments-transfers", verifySheets, async (req, res, next) => {
+  try {
+    // Get the user from verifySheets
+    let userID = req.user.id
+
+    const results = await queryWithRetry(async (pool) => {
+      // Get all transactions within the last 30 days that contain the keywords
+      const transactions = await pool.request()
+        .input("userID", sql.UniqueIdentifier, userID)
+        .query(`
+          SELECT t.internalID, t.externalID, t.accountExternallID, t.transactionDate, t.amount, t.name, t.notes
+          FROM Transactions t
+          WHERE t.userID = @userID
+            AND t.transactionDate >= DATEADD(day, -30, SYSUTCDATETIME())
+            AND (
+                ' ' + t.name + ' '              LIKE '%[^a-z]chase[^a-z]%'
+              OR ' ' + t.name + ' '              LIKE '%[^a-z]transfer[^a-z]%'
+              OR ' ' + ISNULL(t.notes, '') + ' ' LIKE '%[^a-z]chase[^a-z]%'
+              OR ' ' + ISNULL(t.notes, '') + ' ' LIKE '%[^a-z]transfer[^a-z]%'
+            )
+          ORDER BY t.transactionDate DESC
+        `);
+
+        return transactions.recordset
+    });
+
+    res.json({
+      success: true,
+      message: "Success",
+      transactions: results
+    })
+
+  } catch(err) {
+    next(err)
   }
 });
 
