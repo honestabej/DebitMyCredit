@@ -1950,7 +1950,7 @@ app.get("/sheets/payments", verifySheets, async (req, res, next) => {
       const paymentsResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT p.name, a.name AS accountName, p.paymentAmount AS amount, p.completed AS completed, p.fullyCompleted AS fullyCompleted
+          SELECT p.name, a.name AS accountName, p.paymentAmount AS amount, p.completed AS completed, p.fullyCompleted AS fullyCompleted, p.createdAt AS createdAt
           FROM Payments p
           LEFT JOIN Accounts a ON p.paidFromAccountInternalID = a.internalID
           WHERE p.userID = @userID
@@ -1961,7 +1961,7 @@ app.get("/sheets/payments", verifySheets, async (req, res, next) => {
       const transfersResult = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT p.name AS paymentName, a.name AS accountName, pt.transferAmount AS amount, pt.completed AS completed
+          SELECT p.name AS paymentName, a.name AS accountName, pt.transferAmount AS amount, pt.completed AS completed, pt.createdAt AS createdAt
           FROM PaymentTransfers pt
           INNER JOIN Payments p ON pt.paymentID = p.id
           LEFT JOIN Accounts a ON pt.accountInternalID = a.internalID
