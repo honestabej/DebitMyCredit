@@ -1891,16 +1891,31 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
 app.get("/sheets/transactions/payments-transfers", verifySheets, async (req, res, next) => {
   try {
     // Get the user from verifySheets
-    let userID = req.user.id
+    const userID = req.user.id
 
     const results = await queryWithRetry(async (pool) => {
-      // Get all transactions within the last 30 days that contain the keywords
+      // Get all SimpleFIN transactions within the last 30 days that contain the keywords
+      // (Lunch Flow copies are skipped since payments/transfers are on the SimpleFIN accounts)
       const transactions = await pool.request()
         .input("userID", sql.UniqueIdentifier, userID)
         .query(`
-          SELECT t.internalID, t.externalID, t.accountExternallID, t.transactionDate, t.amount, t.name, t.notes
+          SELECT
+            t.internalID,
+            t.externalID,
+            a.externalID AS accountExternalID,
+            a.name AS accountName,
+            t.transactionDate,
+            t.amount,
+            t.name,
+            t.notes,
+            CAST(CASE
+              WHEN EXISTS (SELECT 1 FROM Payments p WHERE p.matchedTransactionID = t.internalID)
+                OR EXISTS (SELECT 1 FROM PaymentTransfers pt WHERE pt.matchedTransactionID = t.internalID)
+              THEN 1 ELSE 0 END AS BIT) AS alreadyMatched -- already completes a payment or transfer
           FROM Transactions t
+          INNER JOIN Accounts a ON t.accountInternalID = a.internalID
           WHERE t.userID = @userID
+            AND a.accountSource = 'SimpleFIN'
             AND t.transactionDate >= DATEADD(day, -30, SYSUTCDATETIME())
             AND (
                 ' ' + t.name + ' '              LIKE '%[^a-z]chase[^a-z]%'
@@ -1911,7 +1926,7 @@ app.get("/sheets/transactions/payments-transfers", verifySheets, async (req, res
           ORDER BY t.transactionDate DESC
         `);
 
-        return transactions.recordset
+      return transactions.recordset
     });
 
     res.json({
