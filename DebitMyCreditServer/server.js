@@ -1574,7 +1574,7 @@ app.get("/sheets/accounts/balance-info", verifySheets, async (req, res, next) =>
           SELECT
             a.externalID,
             a.name,
-            a.balance,
+            a.availableBalance,
             a.balanceDate,
             -- Outgoing: payments this account is making that haven't cleared yet
             ISNULL((
