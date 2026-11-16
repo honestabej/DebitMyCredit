@@ -1669,6 +1669,7 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
 
       // ---------- Work out what changed ----------
       const errors = [];
+      const warnings = []; // applied, but worth showing the user (e.g. an unknown payment name was unlinked)
       const changes = [];
       const affectedPayments = new Set(); // payments whose transactions or allocations changed, recomputed below
       let unchanged = 0;
@@ -1710,12 +1711,11 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
           }
         }
 
-        // New payment (null/blank = no payment)
+        // New payment (null, blank, or a name that doesn't exist = no payment)
         const paymentName = item.paymentName == null ? "" : String(item.paymentName).trim();
         const newPayment = paymentName ? paymentByName[paymentName.toLowerCase()] : null;
         if (paymentName && !newPayment) {
-          errors.push({ externalID: txn.externalID, error: `No payment named "${paymentName}"` });
-          continue;
+          warnings.push({ externalID: txn.externalID, warning: `No payment named "${paymentName}", so it was unlinked from any payment` });
         }
         const newPaymentID = newPayment?.id ?? null;
         const oldPaymentID = txn.paymentID ?? null;
@@ -1876,7 +1876,8 @@ app.post("/sheets/transactions/sync", verifySheets, async (req, res, next) => {
         updated: changes.length,
         unchanged,
         paymentsAdjusted,
-        errors
+        errors,
+        warnings
       };
     });
 
