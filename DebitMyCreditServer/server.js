@@ -1983,95 +1983,68 @@ app.get("/sheets/payments", verifySheets, async (req, res, next) => {
   }
 });
 
-
-
-
-
-
 // ******* iOS App Specific Endpoints *******
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Register a new user
 app.post("/register", async (req, res, next) => {
   try {
+    // Ensure an email and password were sent by the client
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password required" });
+      return res.status(400).json({ success: false, message: "Email and password required" });
     }
+
+    const standardizedEmail = email.trim().toLowerCase()
 
     // Hash password and generate userID BEFORE the database call
     const hashed = await hashPassword(password);
     const id = uuidv4();
 
-    // Wrap ALL database operations in the retry wrapper
-    const result = await queryWithRetry(async (pool) => {
+    const queryResult = await queryWithRetry(async (pool) => {
       // Check if email already exists
       const existing = await pool.request()
-        .input("email", sql.VarChar(255), email)
-        .query(`SELECT id FROM Users WHERE email = @email`);
+        .input("standardizedEmail", sql.VarChar(255), standardizedEmail)
+        .query(`SELECT id FROM Users WHERE email = @standardizedEmail`);
 
       if (existing.recordset.length > 0) {
         return { emailExists: true };
       }
 
-      // Insert new user into the Azure DB
-      await pool.request()
+      // Insert and get the new user into the Azure DB
+      const newUser = await pool.request()
         .input("id", sql.VarChar(50), id)
-        .input("email", sql.VarChar(255), email)
+        .input("standardizedEmail", sql.VarChar(255), standardizedEmail)
         .input("passwordHash", sql.VarChar(255), hashed)
         .query(`
-          INSERT INTO Users (
-            id, email, passwordHash
-          )
-          VALUES (@id, @email, @passwordHash)
-        `);
-
-      // Fetch the newly created user to return to the client
-      const newUserResult = await pool.request()
-        .input("id", sql.VarChar(50), id)
-        .query(`
-          SELECT 
-            id, email, createdAt, updatedAt
-          FROM Users
-          WHERE id = @id
+          INSERT INTO Users (id, email, passwordHash)
+          OUTPUT inserted.id, inserted.email, inserted.createdAt, inserted.updatedAt
+          VALUES (@id, @standardizedEmail, @passwordHash)
         `);
 
       return { 
         emailExists: false,
-        user: newUserResult.recordset[0]
+        user: newUser.recordset[0]
       };
     });
 
-    // Handle the result OUTSIDE the wrapper
-    if (result.emailExists) {
-      console.log(`[REGISTER] Registration failed - email already exists: ${email}`);
+    // Handle the result 
+    if (queryResult.emailExists) {
+      console.log(`[/register] Registration failed: email already exists: ${standardizedEmail}`);
       return res.status(409).json({
         success: false,
-        error: "Email already exists"
+        message: "Email already exists"
       });
     }
 
     // Generate JWT
-    const token = jwt.sign({ id: result.user.id, email: result.user.email }, JWT_SECRET);
+    const token = jwt.sign({ id: queryResult.user.id, email: queryResult.user.email }, JWT_SECRET);
 
-    console.log(`[REGISTER] New user registered: ${result.user.id} (${email})`);
+    console.log(`[/register] New user registered: ${standardizedEmail} (${queryResult.user.id})`);
     res.json({
       success: true,
-      message: `New user registered`,
+      message: `New user registered: ${standardizedEmail} (${queryResult.user.id})`,
       token,
-      user: result.user
+      user: queryResult.user
     });
 
   } catch (err) {
@@ -2080,76 +2053,90 @@ app.post("/register", async (req, res, next) => {
 });
 
 // Login an existing user with email/password
-app.post("/login", async (req, res, next) => {
+app.post("/signin", async (req, res, next) => {
   try {
+    // Ensure the client sent an email and password
     const { email, password } = req.body;
 
-    if (!email || !password) return res.status(400).json({ success: false, error: "Missing fields" });
+    if (!email || !password) return res.status(400).json({ success: false, message: "Email and password required" });
+
+    const standardizedEmail = email.trim().toLowerCase()
     
-    // Use the database retry wrapper
-    const result = await queryWithRetry(async (pool) => {
-      const queryResult = await pool.request()
-        .input("email", sql.VarChar(255), email)
+    const queryResult = await queryWithRetry(async (pool) => {
+      // Find the existing user in the DB by email
+      const userQuery = await pool.request()
+        .input("standardizedEmail", sql.VarChar(255), standardizedEmail)
         .query(`
-          SELECT id, email, simpleFinAccessURLData, lunchFlowAPIKeyData, createdAt, updatedAt, passwordHash
+          SELECT id, email, createdAt, updatedAt, passwordHash
           FROM Users
-          WHERE email = @email
+          WHERE email = @standardizedEmail
         `);
 
-      if (queryResult.recordset.length === 0) {
+      // Return failure is the user email is not found
+      if (userQuery.recordset.length === 0) {
         return { found: false };
       }
 
-      const user = queryResult.recordset[0];
+      // Compare the passwords for authentication
+      const user = userQuery.recordset[0];
       const valid = await bcrypt.compare(password, user.passwordHash);
-
-      // Check if credentials are set for each service
-      const simpleFINConnected = user.simpleFinAccessURLData != null && user.simpleFinAccessURLData !== '';
-      const lunchFlowConnected = user.lunchFlowAPIKeyData != null && user.lunchFlowAPIKeyData !== '';
-
-      // Remove sensitive fields before returning
-      delete user.simpleFinAccessURLData;
-      delete user.lunchFlowAPIKeyData;
-      delete user.passwordHash;
 
       if (!valid) {
         return { found: true, valid: false };
       }
 
-      // Generate JWT
-      const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+      // Remove password hash before returning
+      delete user.passwordHash;
 
       return {
         found: true,
         valid: true,
-        token,
-        user: { ...user, simpleFINConnected, lunchFlowConnected }
+        user
       };
     });
 
     // Handle the result
-    if (!result.found) {
-      return res.json({ success: false, message: "Invalid email and password" });
+    if (!queryResult.found || !queryResult.valid) {
+      return res.status(401).json({ success: false, message: "Invalid email and password" });
     }
 
-    if (!result.valid) {
-      return res.json({ success: false, message: "Invalid email and password" });
-    }
+    // Generate JWT
+    const token = jwt.sign({ id: queryResult.user.id, email: queryResult.user.email }, JWT_SECRET);
 
-    const responseData = { 
-      success: true, 
-      token: result.token,
-      user: result.user
-    };
-    
-    // console.log("Final response user object:", JSON.stringify(result.user, null, 2));
-
-    return res.json(responseData);
+    console.log(`[/signin] User ${queryResult.user.email} signed in successfully`)
+    return res.json({
+      success: true,
+      message: `User ${queryResult.user.email} signed in successfully`,
+      token, 
+      user: queryResult.user
+    });
 
   } catch (err) {
     next(err);
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Connect the User's SimpleFin account
 app.post("/connect-simplefin", async (req, res, next) => {
